@@ -106,7 +106,7 @@ def health_check():
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Mouse API Server')
     parser.add_argument('--port', '-p', type=int, default=5000, help='Port to run the server on (default: 5000)')
-    parser.add_argument('--host', type=str, default='0.0.0.0', help='Host to bind to (default: 0.0.0.0)')
+    parser.add_argument('--host', type=str, default='::', help='Host to bind to (default: :: for IPv4/IPv6)')
     
     args = parser.parse_args()
     

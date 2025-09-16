@@ -2,7 +2,7 @@
 
 # デフォルト値
 DEFAULT_PORT=5000
-DEFAULT_HOST="0.0.0.0"  # IPv4とIPv6の両方をバインド
+DEFAULT_HOST="::"  # IPv4とIPv6の両方をバインド
 
 # 引数の解析
 PORT=${1:-$DEFAULT_PORT}
