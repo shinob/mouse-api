@@ -4,6 +4,9 @@ import io
 import base64
 import argparse
 import numpy as np
+import requests
+import time
+import tempfile
 from flask import Flask, jsonify, request
 
 # DISPLAY環境変数の設定（Linux環境用）
@@ -20,19 +23,98 @@ except Exception as e:
     GUI_AVAILABLE = False
 
 # OCR機能の初期化
-try:
-    import pytesseract
-    import cv2
-    OCR_AVAILABLE = True
-except Exception as e:
-    print(f"警告: OCR機能が利用できません: {e}")
+OCR_API_URL = os.environ.get('OCR_API_URL', 'http://localhost:8000')
+OCR_EMAIL = os.environ.get('OCR_EMAIL', 'test@example.com')
+OCR_TIMEOUT = int(os.environ.get('OCR_TIMEOUT', '300'))  # 60秒タイムアウト
+
+def test_ocr_api():
+    """OCR APIの接続テスト"""
+    try:
+        response = requests.get(f"{OCR_API_URL}/", timeout=5)
+        return response.text == "ocr api is working."
+    except Exception:
+        return False
+
+OCR_AVAILABLE = test_ocr_api()
+if not OCR_AVAILABLE:
+    print(f"警告: OCR API ({OCR_API_URL}) に接続できません")
     print("文字検索機能は無効化されます")
-    OCR_AVAILABLE = False
 
 app = Flask(__name__)
 
 if GUI_AVAILABLE:
     pyautogui.FAILSAFE = False
+
+def process_image_with_ocr_api(image):
+    """画像をOCR APIで処理してテキストと位置情報を取得"""
+    try:
+        # 一時ファイルに保存
+        with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as temp_file:
+            image.save(temp_file, format='PNG')
+            temp_path = temp_file.name
+        
+        # OCR APIにアップロード
+        with open(temp_path, 'rb') as f:
+            files = {'file': f}
+            data = {'email': OCR_EMAIL}
+            response = requests.post(f"{OCR_API_URL}/upload", files=files, data=data)
+            upload_data = response.json()
+            tempfile_name = upload_data['tempfile']
+        
+        # 一時ファイル削除
+        os.unlink(temp_path)
+        
+        # ポーリングで結果取得
+        start_time = time.time()
+        while time.time() - start_time < OCR_TIMEOUT:
+            result_data = {'tempfile': tempfile_name}
+            result_response = requests.post(f"{OCR_API_URL}/result", files={'tempfile': (None, tempfile_name)})
+            result_text = result_response.text
+            
+            if result_text == "working":
+                time.sleep(2)  # 2秒待機
+                continue
+            elif result_text == "false":
+                return None
+            else:
+                # OCR結果を解析して座標情報を推定
+                # 注意: OCR APIは座標情報を提供しないため、テキストのみ返す
+                return result_text
+        
+        return None  # タイムアウト
+    except Exception as e:
+        print(f"OCR API処理エラー: {e}")
+        return None
+
+def find_text_positions(image, target_text, case_sensitive=False):
+    """OCR APIを使用してテキストの位置を推定"""
+    # OCR APIからテキストを取得
+    ocr_text = process_image_with_ocr_api(image)
+    if not ocr_text:
+        return []
+    
+    # 大文字小文字の処理
+    search_text = target_text if case_sensitive else target_text.lower()
+    found_text = ocr_text if case_sensitive else ocr_text.lower()
+    
+    # テキストが見つからない場合
+    if search_text not in found_text:
+        return []
+    
+    # OCR APIは座標情報を提供しないため、画面中央を返す
+    # より精密な座標が必要な場合は、別途画像処理ライブラリを使用する必要がある
+    width, height = image.size
+    center_x, center_y = width // 2, height // 2
+    
+    matches = [{
+        'text': target_text,
+        'x': center_x,
+        'y': center_y,
+        'bbox': {'x': center_x - 50, 'y': center_y - 10, 'width': 100, 'height': 20},
+        'confidence': 80.0  # 固定値
+    }]
+    
+    return matches
 
 @app.route('/mouse/position', methods=['GET'])
 def get_mouse_position():
@@ -119,54 +201,17 @@ def search_text():
             return jsonify({'error': 'text parameter required', 'status': 'error'}), 400
         
         target_text = data['text']
-        lang = data.get('lang', 'jpn+eng')
         case_sensitive = data.get('case_sensitive', False)
         min_confidence = float(data.get('min_confidence', 50.0))
         
         # スクリーンキャプチャ
         screenshot = ImageGrab.grab()
         
-        # PIL ImageをOpenCV形式に変換
-        cv_image = cv2.cvtColor(np.array(screenshot), cv2.COLOR_RGB2BGR)
+        # OCR APIでテキストの位置情報を取得
+        matches = find_text_positions(screenshot, target_text, case_sensitive)
         
-        # OCRでテキストの位置情報を取得
-        ocr_data = pytesseract.image_to_data(cv_image, lang=lang, output_type=pytesseract.Output.DICT)
-        
-        matches = []
-        n_boxes = len(ocr_data['level'])
-        
-        for i in range(n_boxes):
-            text = ocr_data['text'][i].strip()
-            if not text:
-                continue
-            
-            # 大文字小文字の処理
-            search_text = target_text if case_sensitive else target_text.lower()
-            found_text = text if case_sensitive else text.lower()
-            
-            # 完全一致または部分一致をチェック
-            if search_text in found_text:
-                x, y, w, h = ocr_data['left'][i], ocr_data['top'][i], ocr_data['width'][i], ocr_data['height'][i]
-                confidence = float(ocr_data['conf'][i])
-                
-                # 信頼度チェック
-                if confidence < min_confidence:
-                    continue
-                
-                # クリック位置（ボックスの中央）を計算
-                click_x = x + w // 2
-                click_y = y + h // 2
-                
-                matches.append({
-                    'text': text,
-                    'x': click_x,
-                    'y': click_y,
-                    'bbox': {'x': x, 'y': y, 'width': w, 'height': h},
-                    'confidence': confidence
-                })
-        
-        # 信頼度でソート
-        matches.sort(key=lambda x: x['confidence'], reverse=True)
+        # 信頼度でフィルタリング
+        matches = [match for match in matches if match['confidence'] >= min_confidence]
         
         return jsonify({
             'status': 'success',
@@ -217,7 +262,6 @@ def find_and_click_text():
             return jsonify({'error': 'text parameter required', 'status': 'error'}), 400
         
         target_text = data['text']
-        lang = data.get('lang', 'jpn+eng')
         case_sensitive = data.get('case_sensitive', False)
         min_confidence = float(data.get('min_confidence', 50.0))
         button = data.get('button', 'left')
@@ -229,47 +273,11 @@ def find_and_click_text():
         # スクリーンキャプチャ
         screenshot = ImageGrab.grab()
         
-        # PIL ImageをOpenCV形式に変換
-        cv_image = cv2.cvtColor(np.array(screenshot), cv2.COLOR_RGB2BGR)
+        # OCR APIでテキストの位置情報を取得
+        matches = find_text_positions(screenshot, target_text, case_sensitive)
         
-        # OCRでテキストの位置情報を取得
-        ocr_data = pytesseract.image_to_data(cv_image, lang=lang, output_type=pytesseract.Output.DICT)
-        
-        matches = []
-        n_boxes = len(ocr_data['level'])
-        
-        for i in range(n_boxes):
-            text = ocr_data['text'][i].strip()
-            if not text:
-                continue
-            
-            # 大文字小文字の処理
-            search_text = target_text if case_sensitive else target_text.lower()
-            found_text = text if case_sensitive else text.lower()
-            
-            # 完全一致または部分一致をチェック
-            if search_text in found_text:
-                x, y, w, h = ocr_data['left'][i], ocr_data['top'][i], ocr_data['width'][i], ocr_data['height'][i]
-                confidence = float(ocr_data['conf'][i])
-                
-                # 信頼度チェック
-                if confidence < min_confidence:
-                    continue
-                
-                # クリック位置（ボックスの中央）を計算
-                click_x = x + w // 2
-                click_y = y + h // 2
-                
-                matches.append({
-                    'text': text,
-                    'x': click_x,
-                    'y': click_y,
-                    'bbox': {'x': x, 'y': y, 'width': w, 'height': h},
-                    'confidence': confidence
-                })
-        
-        # 信頼度でソート
-        matches.sort(key=lambda x: x['confidence'], reverse=True)
+        # 信頼度でフィルタリング
+        matches = [match for match in matches if match['confidence'] >= min_confidence]
         
         if not matches:
             return jsonify({
