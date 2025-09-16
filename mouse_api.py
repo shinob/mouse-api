@@ -9,10 +9,6 @@ from flask import Flask, jsonify, request
 if os.name == 'posix' and 'DISPLAY' not in os.environ:
     os.environ['DISPLAY'] = ':0'
 
-# X11認証の無効化（ヘッドレス環境対応）
-if os.name == 'posix':
-    os.environ['XAUTHORITY'] = ''
-
 try:
     import pyautogui
     from PIL import ImageGrab

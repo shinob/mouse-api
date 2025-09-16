@@ -24,7 +24,7 @@ fi
 source venv/bin/activate
 
 # 依存関係がインストールされているかチェック
-if ! python -c "import flask" 2>/dev/null; then
+if ! python3 -c "import flask" 2>/dev/null; then
     echo "依存関係が不足しています。requirements.txtからインストールします..."
     pip install -r requirements.txt
 fi
@@ -40,4 +40,4 @@ echo "サーバーを起動中..."
 echo "停止するには Ctrl+C を押してください"
 echo ""
 
-python mouse_api.py --host "$HOST" --port "$PORT"
+python3 mouse_api.py --host "$HOST" --port "$PORT"
