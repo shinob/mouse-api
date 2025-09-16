@@ -31,7 +31,7 @@ def test_ocr_api():
     """OCR APIの接続テスト"""
     try:
         response = requests.get(f"{OCR_API_URL}/", timeout=5)
-        return response.text == "ocr api is working."
+        return response.text.strip('"') == "ocr api is working."
     except Exception:
         return False
 
