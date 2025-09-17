@@ -42,6 +42,15 @@ app = Flask(__name__)
 if GUI_AVAILABLE:
     pyautogui.FAILSAFE = False
 
+# クリップボード機能（pyperclip）の初期化
+try:
+    import pyperclip
+    CLIPBOARD_AVAILABLE = True
+except Exception as e:
+    print(f"警告: クリップボード機能が利用できません: {e}")
+    print("貼り付け入力モードは無効化されます。必要なら 'pip install pyperclip' を実行し、Linuxでは xclip/xsel の導入が必要です。")
+    CLIPBOARD_AVAILABLE = False
+
 def preprocess_image_for_ocr(image):
     """OCR精度向上のための画像前処理"""
     # PIL ImageをNumPy配列に変換
@@ -816,6 +825,115 @@ def click_mouse():
     except Exception as e:
         return jsonify({'error': str(e), 'status': 'error'}), 500
 
+@app.route('/mouse/scroll', methods=['POST'])
+def scroll_mouse():
+    """マウスホイールスクロール"""
+    if not GUI_AVAILABLE:
+        return jsonify({'error': 'GUI functionality not available', 'status': 'error'}), 503
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({'error': 'Request body required', 'status': 'error'}), 400
+        
+        # パラメータ取得
+        clicks = data.get('clicks', 1)  # スクロール量（正数で上/右、負数で下/左）
+        x = data.get('x')  # スクロール位置のX座標（オプション）
+        y = data.get('y')  # スクロール位置のY座標（オプション）
+        direction = data.get('direction', 'vertical')  # スクロール方向
+        
+        # パラメータ検証
+        if direction not in ['vertical', 'horizontal']:
+            return jsonify({'error': 'Invalid direction. Use vertical or horizontal', 'status': 'error'}), 400
+        
+        try:
+            clicks = int(clicks)
+        except (ValueError, TypeError):
+            return jsonify({'error': 'clicks must be an integer', 'status': 'error'}), 400
+        
+        # 指定座標にマウスを移動（オプション）
+        if x is not None and y is not None:
+            try:
+                x = int(x)
+                y = int(y)
+                pyautogui.moveTo(x, y)
+            except (ValueError, TypeError):
+                return jsonify({'error': 'x and y coordinates must be integers', 'status': 'error'}), 400
+        
+        # スクロール実行
+        if direction == 'vertical':
+            pyautogui.scroll(clicks)
+            action = f"垂直スクロール: {'上' if clicks > 0 else '下'}方向に{abs(clicks)}クリック"
+        else:
+            # 水平スクロール（pyautoguiでは hscroll を使用）
+            pyautogui.hscroll(clicks)
+            action = f"水平スクロール: {'右' if clicks > 0 else '左'}方向に{abs(clicks)}クリック"
+        
+        response_data = {
+            'status': 'success',
+            'action': action,
+            'clicks': clicks,
+            'direction': direction
+        }
+        
+        if x is not None and y is not None:
+            response_data['position'] = {'x': x, 'y': y}
+            
+        return jsonify(response_data)
+        
+    except Exception as e:
+        return jsonify({'error': str(e), 'status': 'error'}), 500
+
+@app.route('/mouse/drag', methods=['POST'])
+def drag_mouse():
+    """マウスドラッグ操作"""
+    if not GUI_AVAILABLE:
+        return jsonify({'error': 'GUI functionality not available', 'status': 'error'}), 503
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({'error': 'Request body required', 'status': 'error'}), 400
+        
+        # 必須パラメータ
+        if 'to_x' not in data or 'to_y' not in data:
+            return jsonify({'error': 'to_x and to_y coordinates required', 'status': 'error'}), 400
+        
+        # パラメータ取得
+        from_x = data.get('from_x')  # ドラッグ開始X座標（オプション、現在位置から）
+        from_y = data.get('from_y')  # ドラッグ開始Y座標（オプション、現在位置から）
+        to_x = int(data['to_x'])     # ドラッグ終了X座標（必須）
+        to_y = int(data['to_y'])     # ドラッグ終了Y座標（必須）
+        duration = float(data.get('duration', 1.0))  # ドラッグにかける時間（秒）
+        button = data.get('button', 'left')  # ドラッグボタン
+        
+        # パラメータ検証
+        if button not in ['left', 'right', 'middle']:
+            return jsonify({'error': 'Invalid button. Use left, right, or middle', 'status': 'error'}), 400
+        
+        # ドラッグ実行
+        if from_x is not None and from_y is not None:
+            # 指定座標からドラッグ
+            from_x = int(from_x)
+            from_y = int(from_y)
+            pyautogui.drag(to_x - from_x, to_y - from_y, duration=duration, button=button)
+            action = f"{button}ボタンで ({from_x}, {from_y}) から ({to_x}, {to_y}) にドラッグ"
+        else:
+            # 現在位置からドラッグ
+            current_x, current_y = pyautogui.position()
+            pyautogui.drag(to_x - current_x, to_y - current_y, duration=duration, button=button)
+            action = f"{button}ボタンで ({current_x}, {current_y}) から ({to_x}, {to_y}) にドラッグ"
+        
+        return jsonify({
+            'status': 'success',
+            'action': action,
+            'from_position': {'x': from_x or current_x, 'y': from_y or current_y},
+            'to_position': {'x': to_x, 'y': to_y},
+            'duration': duration,
+            'button': button
+        })
+        
+    except Exception as e:
+        return jsonify({'error': str(e), 'status': 'error'}), 500
+
 @app.route('/screen/capture', methods=['GET'])
 def capture_screen():
     if not GUI_AVAILABLE:
@@ -886,15 +1004,62 @@ def type_text():
         x = data.get('x')
         y = data.get('y')
         interval = float(data.get('interval', 0.1))
+        mode = data.get('mode', 'type')  # 'type' or 'paste'
+        paste_delay = float(data.get('paste_delay', 0.1))
+        preserve_clipboard = bool(data.get('preserve_clipboard', True))
         
         # 指定座標がある場合はクリック
         if x is not None and y is not None:
             pyautogui.click(x, y)
         
-        # テキスト入力
-        pyautogui.typewrite(text, interval=interval)
-        
-        return jsonify({'status': 'success', 'text': text})
+        # 入力モード切り替え
+        if mode == 'paste':
+            if not CLIPBOARD_AVAILABLE:
+                return jsonify({'error': 'Clipboard functionality not available', 'status': 'error'}), 503
+
+            original_clip = None
+            original_ok = False
+            try:
+                if preserve_clipboard:
+                    try:
+                        original_clip = pyperclip.paste()
+                        original_ok = True
+                    except Exception:
+                        original_ok = False
+
+                # クリップボードへコピー
+                try:
+                    pyperclip.copy(text)
+                except Exception as ce:
+                    return jsonify({
+                        'error': 'Clipboard copy failed',
+                        'details': str(ce),
+                        'status': 'error',
+                        'hint': 'Linuxでは xclip または xsel の導入が必要です'
+                    }), 503
+
+                # 少し待機してから貼り付け（アプリ側の反映待ち）
+                time.sleep(paste_delay)
+
+                # OSごとのショートカットで貼り付け
+                import platform
+                if platform.system() == 'Darwin':
+                    pyautogui.hotkey('command', 'v')
+                else:
+                    pyautogui.hotkey('ctrl', 'v')
+
+                result = {'status': 'success', 'text': text, 'mode': 'paste'}
+                return jsonify(result)
+            finally:
+                if preserve_clipboard and original_ok:
+                    try:
+                        pyperclip.copy(original_clip if original_clip is not None else '')
+                    except Exception:
+                        pass
+        else:
+            # 直接タイプ入力
+            pyautogui.typewrite(text, interval=interval)
+            return jsonify({'status': 'success', 'text': text, 'mode': 'type'})
         
     except Exception as e:
         return jsonify({'error': str(e), 'status': 'error'}), 500
