@@ -8,6 +8,7 @@ import requests
 import time
 import tempfile
 from flask import Flask, jsonify, request
+from PIL import Image, ImageDraw, ImageFont
 
 # DISPLAY環境変数の設定（Linux環境用）
 if os.name == 'posix' and 'DISPLAY' not in os.environ:
@@ -182,6 +183,99 @@ def find_text_positions(image, target_text, case_sensitive=False):
             matches.append(match_result)
     
     return matches
+
+def draw_ocr_overlay(image, ocr_results, target_text=None, show_all=True):
+    """OCR結果を画像に重ね合わせて描画"""
+    # 画像をコピー（元画像を変更しないため）
+    overlay_image = image.copy()
+    draw = ImageDraw.Draw(overlay_image)
+    
+    # フォントを設定（デフォルトフォントを使用）
+    try:
+        # システムにある日本語フォントを試す
+        font_paths = [
+            '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
+            '/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf',
+            '/System/Library/Fonts/Arial.ttf',  # macOS
+        ]
+        font = None
+        for font_path in font_paths:
+            if os.path.exists(font_path):
+                try:
+                    font = ImageFont.truetype(font_path, 12)
+                    break
+                except:
+                    continue
+        
+        if font is None:
+            font = ImageFont.load_default()
+    except:
+        font = ImageFont.load_default()
+    
+    # OCR結果を描画
+    for i, result in enumerate(ocr_results):
+        bbox = result['bbox']
+        text = result['text']
+        confidence = result['confidence']
+        
+        # バウンディングボックスの座標
+        x, y, w, h = bbox['x'], bbox['y'], bbox['width'], bbox['height']
+        
+        # ターゲットテキストかどうかで色を変更
+        is_target = False
+        if target_text:
+            target_lower = target_text.lower()
+            text_lower = text.lower()
+            is_target = target_lower in text_lower
+        
+        # 色の設定
+        if is_target:
+            box_color = (255, 0, 0)  # 赤色（ターゲットテキスト）
+            text_color = (255, 255, 255)  # 白色
+            bg_color = (255, 0, 0, 128)  # 半透明赤
+        elif show_all:
+            if confidence >= 80:
+                box_color = (0, 255, 0)  # 緑色（高信頼度）
+            elif confidence >= 50:
+                box_color = (255, 165, 0)  # オレンジ色（中信頼度）
+            else:
+                box_color = (128, 128, 128)  # グレー色（低信頼度）
+            text_color = (255, 255, 255)
+            bg_color = (*box_color, 128)  # 半透明
+        else:
+            continue  # show_all=Falseでターゲットでない場合はスキップ
+        
+        # バウンディングボックスを描画
+        draw.rectangle([x, y, x + w, y + h], outline=box_color, width=2)
+        
+        # 信頼度とテキストのラベルを作成
+        label = f"{text} ({confidence:.1f}%)"
+        
+        # ラベルの背景を描画
+        try:
+            bbox_text = draw.textbbox((0, 0), label, font=font)
+            label_width = bbox_text[2] - bbox_text[0]
+            label_height = bbox_text[3] - bbox_text[1]
+        except:
+            # 古いPillowバージョンの場合
+            label_width, label_height = draw.textsize(label, font=font)
+        
+        label_x = x
+        label_y = max(0, y - label_height - 2)
+        
+        # ラベル背景を描画
+        draw.rectangle([label_x, label_y, label_x + label_width, label_y + label_height], 
+                      fill=box_color)
+        
+        # テキストを描画
+        draw.text((label_x, label_y), label, fill=text_color, font=font)
+        
+        # 中心点を描画
+        center_x, center_y = result['x'], result['y']
+        draw.ellipse([center_x-3, center_y-3, center_x+3, center_y+3], 
+                    fill=box_color, outline=(255, 255, 255))
+    
+    return overlay_image
 
 @app.route('/mouse/position', methods=['GET'])
 def get_mouse_position():
@@ -365,6 +459,63 @@ def find_and_click_text():
             'status': 'success',
             'clicked': clicked_positions,
             'total_clicked': len(clicked_positions)
+        })
+        
+    except Exception as e:
+        return jsonify({'error': str(e), 'status': 'error'}), 500
+
+@app.route('/screen/capture_with_ocr', methods=['POST'])
+def capture_screen_with_ocr():
+    """スクリーンキャプチャしてOCR結果を重ね合わせた画像を返す"""
+    if not GUI_AVAILABLE:
+        return jsonify({'error': 'GUI functionality not available', 'status': 'error'}), 503
+    if not OCR_AVAILABLE:
+        return jsonify({'error': 'OCR functionality not available', 'status': 'error'}), 503
+    
+    try:
+        data = request.get_json() or {}
+        target_text = data.get('text', None)  # 特定のテキストをハイライト
+        show_all = data.get('show_all', True)  # 全てのテキストを表示するか
+        min_confidence = float(data.get('min_confidence', 30.0))  # 最小信頼度
+        
+        # スクリーンキャプチャ
+        screenshot = ImageGrab.grab()
+        
+        # OCRでテキストを検出
+        ocr_results = process_image_with_tesseract(screenshot)
+        
+        # 信頼度でフィルタリング
+        filtered_results = [result for result in ocr_results if result['confidence'] >= min_confidence]
+        
+        # OCR結果を画像に重ね合わせ
+        overlay_image = draw_ocr_overlay(screenshot, filtered_results, target_text, show_all)
+        
+        # 画像をBase64エンコード
+        img_buffer = io.BytesIO()
+        overlay_image.save(img_buffer, format='PNG')
+        img_buffer.seek(0)
+        img_base64 = base64.b64encode(img_buffer.getvalue()).decode('utf-8')
+        
+        # ターゲットテキストが指定されている場合、マッチした結果を別途返す
+        target_matches = []
+        if target_text:
+            target_matches = find_text_positions(screenshot, target_text, False)
+            target_matches = [match for match in target_matches if match['confidence'] >= min_confidence]
+        
+        return jsonify({
+            'status': 'success',
+            'image': img_base64,
+            'format': 'PNG',
+            'size': {'width': overlay_image.width, 'height': overlay_image.height},
+            'ocr_results': filtered_results,
+            'total_detected': len(filtered_results),
+            'target_matches': target_matches,
+            'total_target_matches': len(target_matches),
+            'parameters': {
+                'target_text': target_text,
+                'show_all': show_all,
+                'min_confidence': min_confidence
+            }
         })
         
     except Exception as e:
