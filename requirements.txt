@@ -1,7 +1,6 @@
 Flask==2.3.3
 pyautogui==0.9.54
 Pillow==10.0.1
-pytesseract>=0.3.10
-opencv-python>=4.5.0
+easyocr>=1.6.0
 numpy>=1.21.0
 requests>=2.25.0

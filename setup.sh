@@ -5,15 +5,8 @@ echo "Mouse API セットアップを開始します..."
 # システム要件のチェック
 echo "システム要件をチェックしています..."
 
-# Tesseract OCRのチェック
-if ! command -v tesseract &> /dev/null; then
-    echo "警告: Tesseract OCRがインストールされていません"
-    echo "OCR機能を使用するには以下のコマンドを実行してください:"
-    echo "  Ubuntu/Debian: sudo apt-get install tesseract-ocr tesseract-ocr-jpn"
-    echo "  Red Hat系: sudo yum install tesseract tesseract-langpack-jpn"
-    echo "  macOS: brew install tesseract tesseract-lang"
-    echo ""
-fi
+# EasyOCRの情報表示
+echo "OCR機能: EasyOCRを使用します（自動でインストールされます）"
 
 # python3-tkのチェック (Linuxのみ)
 if [[ "$OSTYPE" == "linux-gnu"* ]]; then
@@ -53,7 +46,7 @@ echo ""
 echo "🔧 利用可能な機能:"
 echo "  - マウス操作 (位置取得、移動、クリック)"
 echo "  - スクリーンキャプチャ"
-echo "  - OCR文字検索 (Tesseractが必要)"
+echo "  - OCR文字検索 (EasyOCR使用)"
 echo "  - 文字入力"
 echo "  - 文字検索＆自動クリック"
 echo ""

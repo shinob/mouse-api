@@ -22,97 +22,90 @@ except Exception as e:
     print("画面キャプチャとマウス操作は無効化されます")
     GUI_AVAILABLE = False
 
-# OCR機能の初期化
-OCR_API_URL = os.environ.get('OCR_API_URL', 'http://localhost:8000')
-OCR_EMAIL = os.environ.get('OCR_EMAIL', 'test@example.com')
-OCR_TIMEOUT = int(os.environ.get('OCR_TIMEOUT', '300'))  # 60秒タイムアウト
-
-def test_ocr_api():
-    """OCR APIの接続テスト"""
-    try:
-        response = requests.get(f"{OCR_API_URL}/", timeout=5)
-        return response.text.strip('"') == "ocr api is working."
-    except Exception:
-        return False
-
-OCR_AVAILABLE = test_ocr_api()
-if not OCR_AVAILABLE:
-    print(f"警告: OCR API ({OCR_API_URL}) に接続できません")
+# EasyOCR機能の初期化
+try:
+    import easyocr
+    OCR_AVAILABLE = True
+    # EasyOCRリーダーを初期化（日本語と英語をサポート）
+    ocr_reader = easyocr.Reader(['ja', 'en'], gpu=False)
+except Exception as e:
+    print(f"警告: EasyOCR機能が利用できません: {e}")
     print("文字検索機能は無効化されます")
+    OCR_AVAILABLE = False
+    ocr_reader = None
+
 
 app = Flask(__name__)
 
 if GUI_AVAILABLE:
     pyautogui.FAILSAFE = False
 
-def process_image_with_ocr_api(image):
-    """画像をOCR APIで処理してテキストと位置情報を取得"""
+def process_image_with_easyocr(image):
+    """EasyOCRを使用して画像からテキストと位置情報を取得"""
+    if not OCR_AVAILABLE or ocr_reader is None:
+        return []
+    
     try:
-        # 一時ファイルに保存
-        with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as temp_file:
-            image.save(temp_file, format='PNG')
-            temp_path = temp_file.name
+        # PIL ImageをNumPy配列に変換
+        img_array = np.array(image)
         
-        # OCR APIにアップロード
-        with open(temp_path, 'rb') as f:
-            files = {'file': f}
-            data = {'email': OCR_EMAIL}
-            response = requests.post(f"{OCR_API_URL}/upload", files=files, data=data)
-            upload_data = response.json()
-            tempfile_name = upload_data['tempfile']
+        # EasyOCRで文字認識を実行
+        results = ocr_reader.readtext(img_array)
         
-        # 一時ファイル削除
-        os.unlink(temp_path)
-        
-        # ポーリングで結果取得
-        start_time = time.time()
-        while time.time() - start_time < OCR_TIMEOUT:
-            result_data = {'tempfile': tempfile_name}
-            result_response = requests.post(f"{OCR_API_URL}/result", files={'tempfile': (None, tempfile_name)})
-            result_text = result_response.text
+        # 結果を標準化されたフォーマットに変換
+        formatted_results = []
+        for (bbox, text, confidence) in results:
+            # バウンディングボックスの座標を取得
+            x_coords = [point[0] for point in bbox]
+            y_coords = [point[1] for point in bbox]
             
-            if result_text == "working":
-                time.sleep(2)  # 2秒待機
-                continue
-            elif result_text == "false":
-                return None
-            else:
-                # OCR結果を解析して座標情報を推定
-                # 注意: OCR APIは座標情報を提供しないため、テキストのみ返す
-                return result_text
+            x_min, x_max = min(x_coords), max(x_coords)
+            y_min, y_max = min(y_coords), max(y_coords)
+            
+            # 中心座標を計算
+            center_x = int((x_min + x_max) / 2)
+            center_y = int((y_min + y_max) / 2)
+            
+            formatted_results.append({
+                'text': text,
+                'x': center_x,
+                'y': center_y,
+                'bbox': {
+                    'x': int(x_min),
+                    'y': int(y_min),
+                    'width': int(x_max - x_min),
+                    'height': int(y_max - y_min)
+                },
+                'confidence': confidence * 100  # 0-1 を 0-100 に変換
+            })
         
-        return None  # タイムアウト
+        return formatted_results
+        
     except Exception as e:
-        print(f"OCR API処理エラー: {e}")
-        return None
+        print(f"EasyOCR処理エラー: {e}")
+        return []
 
 def find_text_positions(image, target_text, case_sensitive=False):
-    """OCR APIを使用してテキストの位置を推定"""
-    # OCR APIからテキストを取得
-    ocr_text = process_image_with_ocr_api(image)
-    if not ocr_text:
+    """EasyOCRを使用してテキストの位置を取得"""
+    # EasyOCRで全てのテキストと位置情報を取得
+    all_results = process_image_with_easyocr(image)
+    if not all_results:
         return []
     
     # 大文字小文字の処理
     search_text = target_text if case_sensitive else target_text.lower()
-    found_text = ocr_text if case_sensitive else ocr_text.lower()
     
-    # テキストが見つからない場合
-    if search_text not in found_text:
-        return []
-    
-    # OCR APIは座標情報を提供しないため、画面中央を返す
-    # より精密な座標が必要な場合は、別途画像処理ライブラリを使用する必要がある
-    width, height = image.size
-    center_x, center_y = width // 2, height // 2
-    
-    matches = [{
-        'text': target_text,
-        'x': center_x,
-        'y': center_y,
-        'bbox': {'x': center_x - 50, 'y': center_y - 10, 'width': 100, 'height': 20},
-        'confidence': 80.0  # 固定値
-    }]
+    # マッチするテキストを検索
+    matches = []
+    for result in all_results:
+        found_text = result['text'] if case_sensitive else result['text'].lower()
+        
+        # 部分マッチまたは完全マッチをチェック
+        if search_text in found_text:
+            # マッチした場合は結果に追加
+            match_result = result.copy()
+            match_result['matched_text'] = target_text
+            matches.append(match_result)
     
     return matches
 
