@@ -41,51 +41,119 @@ app = Flask(__name__)
 if GUI_AVAILABLE:
     pyautogui.FAILSAFE = False
 
+def preprocess_image_for_ocr(image):
+    """OCR精度向上のための画像前処理"""
+    # PIL ImageをNumPy配列に変換
+    img_array = np.array(image)
+    
+    # OpenCVでグレースケール変換
+    if len(img_array.shape) == 3:
+        gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
+    else:
+        gray = img_array
+    
+    # 1. ノイズ除去（ガウシアンブラー）
+    denoised = cv2.GaussianBlur(gray, (1, 1), 0)
+    
+    # 2. コントラスト強化（CLAHE - 適応ヒストグラム均等化）
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    enhanced = clahe.apply(denoised)
+    
+    # 3. シャープニング
+    kernel = np.array([[-1,-1,-1], [-1,9,-1], [-1,-1,-1]])
+    sharpened = cv2.filter2D(enhanced, -1, kernel)
+    
+    # 4. 二値化（Otsuの手法）
+    _, binary = cv2.threshold(sharpened, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    
+    # 5. モルフォロジー演算（ノイズ除去と文字の補完）
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, 1))
+    cleaned = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
+    
+    return cleaned
+
 def process_image_with_tesseract(image):
     """Tesseractを使用して画像からテキストと位置情報を取得"""
     if not OCR_AVAILABLE:
         return []
     
     try:
-        # PIL ImageをNumPy配列に変換
-        img_array = np.array(image)
-        
-        # OpenCVでグレースケール変換（OCR精度向上のため）
-        if len(img_array.shape) == 3:
-            gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
-        else:
-            gray = img_array
+        # 画像前処理を実行
+        processed_image = preprocess_image_for_ocr(image)
         
         # Tesseractで文字認識と位置情報を取得
-        # 日本語と英語を指定
-        custom_config = r'--oem 3 --psm 6 -l jpn+eng'
-        data = pytesseract.image_to_data(gray, config=custom_config, output_type=pytesseract.Output.DICT)
+        # 複数の設定を試してベストな結果を選択
+        configs = [
+            r'--oem 3 --psm 6 -l jpn+eng',  # 標準設定
+            r'--oem 3 --psm 3 -l jpn+eng',  # 完全に自動的なページセグメンテーション
+            r'--oem 3 --psm 7 -l jpn+eng',  # 単一テキスト行として処理
+            r'--oem 3 --psm 8 -l jpn+eng',  # 単一単語として処理
+        ]
         
-        # 結果を標準化されたフォーマットに変換
-        formatted_results = []
-        n_boxes = len(data['text'])
-        for i in range(n_boxes):
-            if int(data['conf'][i]) > 0:  # 信頼度が0より大きいもののみ
-                text = data['text'][i].strip()
-                if text:  # 空文字でないもののみ
-                    x, y, w, h = data['left'][i], data['top'][i], data['width'][i], data['height'][i]
-                    center_x = x + w // 2
-                    center_y = y + h // 2
+        best_results = []
+        best_confidence = 0
+        
+        for config in configs:
+            try:
+                data = pytesseract.image_to_data(processed_image, config=config, output_type=pytesseract.Output.DICT)
+                
+                # 結果を標準化されたフォーマットに変換
+                current_results = []
+                total_confidence = 0
+                valid_count = 0
+                
+                n_boxes = len(data['text'])
+                for i in range(n_boxes):
+                    if int(data['conf'][i]) > 30:  # 信頼度閾値を30に設定
+                        text = data['text'][i].strip()
+                        if text and len(text) > 0:  # 空文字でないもののみ
+                            x, y, w, h = data['left'][i], data['top'][i], data['width'][i], data['height'][i]
+                            center_x = x + w // 2
+                            center_y = y + h // 2
+                            
+                            current_results.append({
+                                'text': text,
+                                'x': center_x,
+                                'y': center_y,
+                                'bbox': {
+                                    'x': x,
+                                    'y': y,
+                                    'width': w,
+                                    'height': h
+                                },
+                                'confidence': float(data['conf'][i])
+                            })
+                            
+                            total_confidence += float(data['conf'][i])
+                            valid_count += 1
+                
+                # 平均信頼度を計算
+                avg_confidence = total_confidence / valid_count if valid_count > 0 else 0
+                
+                # より良い結果の場合は更新
+                if avg_confidence > best_confidence:
+                    best_confidence = avg_confidence
+                    best_results = current_results
                     
-                    formatted_results.append({
-                        'text': text,
-                        'x': center_x,
-                        'y': center_y,
-                        'bbox': {
-                            'x': x,
-                            'y': y,
-                            'width': w,
-                            'height': h
-                        },
-                        'confidence': float(data['conf'][i])
-                    })
+            except Exception:
+                continue
         
-        return formatted_results
+        # フィルタリング: 重複する結果を除去
+        filtered_results = []
+        for result in best_results:
+            # 既存の結果と重複していないかチェック
+            is_duplicate = False
+            for existing in filtered_results:
+                # 座標が近く、テキストが類似している場合は重複とみなす
+                distance = abs(result['x'] - existing['x']) + abs(result['y'] - existing['y'])
+                if distance < 20 and result['text'].lower() in existing['text'].lower():
+                    is_duplicate = True
+                    break
+            
+            if not is_duplicate:
+                filtered_results.append(result)
+        
+        return filtered_results
         
     except Exception as e:
         print(f"Tesseract処理エラー: {e}")
