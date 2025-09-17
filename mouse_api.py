@@ -190,27 +190,54 @@ def draw_ocr_overlay(image, ocr_results, target_text=None, show_all=True):
     overlay_image = image.copy()
     draw = ImageDraw.Draw(overlay_image)
     
-    # フォントを設定（デフォルトフォントを使用）
-    try:
-        # システムにある日本語フォントを試す
-        font_paths = [
+    # フォントを設定（日本語対応フォントを優先）
+    def find_japanese_font():
+        # 日本語対応フォントのパスリスト（優先順）
+        japanese_font_paths = [
+            # Ubuntu/Debian日本語フォント
+            '/usr/share/fonts/truetype/fonts-japanese-gothic.ttf',
+            '/usr/share/fonts/truetype/takao-gothic/TakaoGothic.ttf',
+            '/usr/share/fonts/truetype/vlgothic/VL-Gothic-Regular.ttf',
+            '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc',
+            '/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc',
+            
+            # 一般的な日本語フォント
             '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
             '/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf',
-            '/System/Library/Fonts/Arial.ttf',  # macOS
+            
+            # macOS
+            '/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc',
+            '/System/Library/Fonts/Arial Unicode MS.ttf',
+            '/Library/Fonts/Arial Unicode MS.ttf',
+            '/System/Library/Fonts/Arial.ttf',
+            
+            # Windows (WSL環境)
+            '/mnt/c/Windows/Fonts/msgothic.ttc',
+            '/mnt/c/Windows/Fonts/meiryo.ttc',
+            '/mnt/c/Windows/Fonts/arial.ttf',
         ]
-        font = None
-        for font_path in font_paths:
+        
+        for font_path in japanese_font_paths:
             if os.path.exists(font_path):
                 try:
-                    font = ImageFont.truetype(font_path, 12)
-                    break
-                except:
+                    font = ImageFont.truetype(font_path, 14)
+                    print(f"フォント使用: {font_path}")
+                    return font
+                except Exception as e:
                     continue
         
-        if font is None:
+        # フォントが見つからない場合の対策
+        try:
+            # より大きなデフォルトフォントを試す
+            from PIL import ImageFont
             font = ImageFont.load_default()
-    except:
-        font = ImageFont.load_default()
+            print("デフォルトフォントを使用（日本語表示に制限があります）")
+            return font
+        except:
+            print("フォント読み込みエラー")
+            return None
+    
+    font = find_japanese_font()
     
     # OCR結果を描画
     for i, result in enumerate(ocr_results):
@@ -251,24 +278,40 @@ def draw_ocr_overlay(image, ocr_results, target_text=None, show_all=True):
         # 信頼度とテキストのラベルを作成
         label = f"{text} ({confidence:.1f}%)"
         
-        # ラベルの背景を描画
-        try:
-            bbox_text = draw.textbbox((0, 0), label, font=font)
-            label_width = bbox_text[2] - bbox_text[0]
-            label_height = bbox_text[3] - bbox_text[1]
-        except:
-            # 古いPillowバージョンの場合
-            label_width, label_height = draw.textsize(label, font=font)
-        
-        label_x = x
-        label_y = max(0, y - label_height - 2)
-        
-        # ラベル背景を描画
-        draw.rectangle([label_x, label_y, label_x + label_width, label_y + label_height], 
-                      fill=box_color)
-        
-        # テキストを描画
-        draw.text((label_x, label_y), label, fill=text_color, font=font)
+        # フォントが利用可能な場合のみラベルを描画
+        if font:
+            # ラベルの背景を描画
+            try:
+                bbox_text = draw.textbbox((0, 0), label, font=font)
+                label_width = bbox_text[2] - bbox_text[0]
+                label_height = bbox_text[3] - bbox_text[1]
+            except:
+                # 古いPillowバージョンの場合
+                try:
+                    label_width, label_height = draw.textsize(label, font=font)
+                except:
+                    # textsize()も利用できない場合の推定値
+                    label_width = len(label) * 8
+                    label_height = 16
+            
+            label_x = x
+            label_y = max(0, y - label_height - 2)
+            
+            # ラベル背景を描画
+            draw.rectangle([label_x, label_y, label_x + label_width, label_y + label_height], 
+                          fill=box_color)
+            
+            # テキストを描画（エラーハンドリング付き）
+            try:
+                draw.text((label_x, label_y), label, fill=text_color, font=font)
+            except Exception as e:
+                # 日本語フォントでエラーが発生した場合はASCII文字のみで表示
+                ascii_label = f"Text ({confidence:.1f}%)"
+                draw.text((label_x, label_y), ascii_label, fill=text_color, font=font)
+        else:
+            # フォントが利用できない場合は座標のみ表示
+            coord_label = f"({x},{y})"
+            draw.text((x, max(0, y - 15)), coord_label, fill=text_color)
         
         # 中心点を描画
         center_x, center_y = result['x'], result['y']
