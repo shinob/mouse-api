@@ -25,12 +25,18 @@ except Exception as e:
 # EasyOCR機能の初期化
 try:
     import easyocr
+    import os
+    # CPU互換性のための環境変数設定
+    os.environ['OMP_NUM_THREADS'] = '1'
+    os.environ['MKL_NUM_THREADS'] = '1'
+    
     OCR_AVAILABLE = True
-    # EasyOCRリーダーを初期化（日本語と英語をサポート）
-    ocr_reader = easyocr.Reader(['ja', 'en'], gpu=False)
+    # EasyOCRリーダーを初期化（日本語と英語をサポート、GPU無効）
+    ocr_reader = easyocr.Reader(['ja', 'en'], gpu=False, verbose=False)
 except Exception as e:
     print(f"警告: EasyOCR機能が利用できません: {e}")
     print("文字検索機能は無効化されます")
+    print("ヒント: 古いCPUの場合は、代替OCRライブラリの使用を検討してください")
     OCR_AVAILABLE = False
     ocr_reader = None
 
