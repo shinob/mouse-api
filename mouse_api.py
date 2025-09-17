@@ -1340,7 +1340,8 @@ def health_check():
         'status': 'healthy', 
         'service': 'mouse-api',
         'gui_available': GUI_AVAILABLE,
-        'ocr_available': OCR_AVAILABLE
+        'ocr_available': OCR_AVAILABLE,
+        'clipboard_available': 'CLIPBOARD_AVAILABLE' in globals() and CLIPBOARD_AVAILABLE
     })
 
 if __name__ == '__main__':
