@@ -1007,12 +1007,17 @@ def type_text():
         mode = data.get('mode', 'type')  # 'type' or 'paste'
         paste_delay = float(data.get('paste_delay', 0.1))
         preserve_clipboard = bool(data.get('preserve_clipboard', True))
+        press_enter = bool(data.get('press_enter', False))
+        enter_count = int(data.get('enter_count', 1))
+        enter_interval = float(data.get('enter_interval', 0.05))
         
         # 指定座標がある場合はクリック
         if x is not None and y is not None:
             pyautogui.click(x, y)
         
         # 入力モード切り替え
+        result = {'status': 'success', 'text': text}
+        mode_used = mode
         if mode == 'paste':
             if not CLIPBOARD_AVAILABLE:
                 return jsonify({'error': 'Clipboard functionality not available', 'status': 'error'}), 503
@@ -1047,19 +1052,33 @@ def type_text():
                     pyautogui.hotkey('command', 'v')
                 else:
                     pyautogui.hotkey('ctrl', 'v')
-
-                result = {'status': 'success', 'text': text, 'mode': 'paste'}
-                return jsonify(result)
             finally:
                 if preserve_clipboard and original_ok:
                     try:
                         pyperclip.copy(original_clip if original_clip is not None else '')
                     except Exception:
                         pass
+            result['mode'] = 'paste'
         else:
             # 直接タイプ入力
             pyautogui.typewrite(text, interval=interval)
-            return jsonify({'status': 'success', 'text': text, 'mode': 'type'})
+            result['mode'] = 'type'
+
+        # オプション: 入力後にEnterを押下
+        if press_enter:
+            # 少し間を置いてからEnterを押す
+            time.sleep(max(0.0, enter_interval))
+            for _ in range(max(1, enter_count)):
+                pyautogui.press('enter')
+                if enter_interval > 0:
+                    time.sleep(enter_interval)
+            result['pressed_enter'] = True
+            result['enter_count'] = max(1, enter_count)
+        else:
+            result['pressed_enter'] = False
+            result['enter_count'] = 0
+
+        return jsonify(result)
         
     except Exception as e:
         return jsonify({'error': str(e), 'status': 'error'}), 500
