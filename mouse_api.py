@@ -424,6 +424,153 @@ def is_subsequence(target, text):
             target_idx += 1
     return target_idx == len(target)
 
+def find_image_in_screen(template_image, screenshot, threshold=0.8, method=cv2.TM_CCOEFF_NORMED):
+    """画面キャプチャ内でテンプレート画像を検索"""
+    if not OCR_AVAILABLE:
+        return []
+    
+    try:
+        # PIL ImageをOpenCV形式に変換
+        template_cv = cv2.cvtColor(np.array(template_image), cv2.COLOR_RGB2BGR)
+        screenshot_cv = cv2.cvtColor(np.array(screenshot), cv2.COLOR_RGB2BGR)
+        
+        # グレースケール変換
+        template_gray = cv2.cvtColor(template_cv, cv2.COLOR_BGR2GRAY)
+        screenshot_gray = cv2.cvtColor(screenshot_cv, cv2.COLOR_BGR2GRAY)
+        
+        # テンプレートマッチング
+        result = cv2.matchTemplate(screenshot_gray, template_gray, method)
+        
+        # 閾値以上の一致箇所を検索
+        locations = np.where(result >= threshold)
+        matches = []
+        
+        # テンプレートのサイズ取得
+        template_h, template_w = template_gray.shape
+        
+        # マッチした場所の情報を収集
+        for pt_y, pt_x in zip(locations[0], locations[1]):
+            confidence = result[pt_y, pt_x]
+            center_x = pt_x + template_w // 2
+            center_y = pt_y + template_h // 2
+            
+            matches.append({
+                'center_x': int(center_x),
+                'center_y': int(center_y),
+                'top_left_x': int(pt_x),
+                'top_left_y': int(pt_y),
+                'width': int(template_w),
+                'height': int(template_h),
+                'confidence': float(confidence),
+                'method': 'template_matching'
+            })
+        
+        # 信頼度でソート（降順）
+        matches.sort(key=lambda x: x['confidence'], reverse=True)
+        
+        # 重複する検出結果を除去
+        filtered_matches = []
+        for match in matches:
+            is_duplicate = False
+            for existing in filtered_matches:
+                # 中心点の距離を計算
+                distance = ((match['center_x'] - existing['center_x'])**2 + 
+                           (match['center_y'] - existing['center_y'])**2)**0.5
+                
+                # 距離が小さい場合は重複とみなす
+                if distance < min(template_w, template_h) * 0.5:
+                    is_duplicate = True
+                    break
+            
+            if not is_duplicate:
+                filtered_matches.append(match)
+        
+        return filtered_matches
+        
+    except Exception as e:
+        print(f"画像マッチングエラー: {e}")
+        return []
+
+def find_image_multi_scale(template_image, screenshot, threshold=0.8, scale_range=(0.5, 2.0), scale_steps=10):
+    """マルチスケール画像マッチング（異なるサイズでの検索）"""
+    if not OCR_AVAILABLE:
+        return []
+    
+    try:
+        # PIL ImageをOpenCV形式に変換
+        template_cv = cv2.cvtColor(np.array(template_image), cv2.COLOR_RGB2BGR)
+        screenshot_cv = cv2.cvtColor(np.array(screenshot), cv2.COLOR_RGB2BGR)
+        
+        # グレースケール変換
+        template_gray = cv2.cvtColor(template_cv, cv2.COLOR_BGR2GRAY)
+        screenshot_gray = cv2.cvtColor(screenshot_cv, cv2.COLOR_BGR2GRAY)
+        
+        all_matches = []
+        
+        # 複数のスケールで検索
+        for scale in np.linspace(scale_range[0], scale_range[1], scale_steps):
+            # テンプレートをリサイズ
+            template_h, template_w = template_gray.shape
+            new_w = int(template_w * scale)
+            new_h = int(template_h * scale)
+            
+            if new_w < 10 or new_h < 10:  # 小さすぎる場合はスキップ
+                continue
+                
+            resized_template = cv2.resize(template_gray, (new_w, new_h))
+            
+            # テンプレートマッチング
+            result = cv2.matchTemplate(screenshot_gray, resized_template, cv2.TM_CCOEFF_NORMED)
+            
+            # 閾値以上の一致箇所を検索
+            locations = np.where(result >= threshold)
+            
+            # マッチした場所の情報を収集
+            for pt_y, pt_x in zip(locations[0], locations[1]):
+                confidence = result[pt_y, pt_x]
+                center_x = pt_x + new_w // 2
+                center_y = pt_y + new_h // 2
+                
+                all_matches.append({
+                    'center_x': int(center_x),
+                    'center_y': int(center_y),
+                    'top_left_x': int(pt_x),
+                    'top_left_y': int(pt_y),
+                    'width': int(new_w),
+                    'height': int(new_h),
+                    'confidence': float(confidence),
+                    'scale': float(scale),
+                    'method': 'multi_scale_template_matching'
+                })
+        
+        # 信頼度でソート（降順）
+        all_matches.sort(key=lambda x: x['confidence'], reverse=True)
+        
+        # 重複する検出結果を除去
+        filtered_matches = []
+        for match in all_matches:
+            is_duplicate = False
+            for existing in filtered_matches:
+                # 中心点の距離を計算
+                distance = ((match['center_x'] - existing['center_x'])**2 + 
+                           (match['center_y'] - existing['center_y'])**2)**0.5
+                
+                # 距離が小さい場合は重複とみなす
+                overlap_threshold = min(match['width'], match['height'], 
+                                      existing['width'], existing['height']) * 0.3
+                if distance < overlap_threshold:
+                    is_duplicate = True
+                    break
+            
+            if not is_duplicate:
+                filtered_matches.append(match)
+        
+        return filtered_matches[:10]  # 上位10件まで返す
+        
+    except Exception as e:
+        print(f"マルチスケール画像マッチングエラー: {e}")
+        return []
+
 def draw_ocr_overlay(image, ocr_results, target_text=None, show_all=True):
     """OCR結果を画像に重ね合わせて描画"""
     # 画像をコピー（元画像を変更しないため）
@@ -858,6 +1005,151 @@ def capture_screen_with_ocr():
                 'show_all': show_all,
                 'min_confidence': min_confidence
             }
+        })
+        
+    except Exception as e:
+        return jsonify({'error': str(e), 'status': 'error'}), 500
+
+@app.route('/image/search', methods=['POST'])
+def search_image():
+    """画面キャプチャ内で指定された画像を検索"""
+    if not GUI_AVAILABLE:
+        return jsonify({'error': 'GUI functionality not available', 'status': 'error'}), 503
+    if not OCR_AVAILABLE:
+        return jsonify({'error': 'OpenCV functionality not available', 'status': 'error'}), 503
+    
+    try:
+        # リクエストからパラメータを取得
+        threshold = float(request.form.get('threshold', 0.8))
+        multi_scale = request.form.get('multi_scale', 'false').lower() == 'true'
+        scale_range_min = float(request.form.get('scale_range_min', 0.5))
+        scale_range_max = float(request.form.get('scale_range_max', 2.0))
+        scale_steps = int(request.form.get('scale_steps', 10))
+        
+        # アップロードされた画像ファイルを取得
+        if 'image' not in request.files:
+            return jsonify({'error': 'No image file provided', 'status': 'error'}), 400
+        
+        image_file = request.files['image']
+        if image_file.filename == '':
+            return jsonify({'error': 'No image file selected', 'status': 'error'}), 400
+        
+        # 画像ファイルを読み込み
+        try:
+            template_image = Image.open(image_file.stream)
+            # RGBAをRGBに変換（必要に応じて）
+            if template_image.mode == 'RGBA':
+                template_image = template_image.convert('RGB')
+        except Exception as e:
+            return jsonify({'error': f'Invalid image file: {str(e)}', 'status': 'error'}), 400
+        
+        # スクリーンキャプチャ
+        screenshot = ImageGrab.grab()
+        
+        # 画像マッチングを実行
+        if multi_scale:
+            matches = find_image_multi_scale(
+                template_image, 
+                screenshot, 
+                threshold=threshold,
+                scale_range=(scale_range_min, scale_range_max),
+                scale_steps=scale_steps
+            )
+        else:
+            matches = find_image_in_screen(template_image, screenshot, threshold=threshold)
+        
+        return jsonify({
+            'status': 'success',
+            'matches': matches,
+            'total_found': len(matches),
+            'parameters': {
+                'threshold': threshold,
+                'multi_scale': multi_scale,
+                'scale_range': [scale_range_min, scale_range_max] if multi_scale else None,
+                'scale_steps': scale_steps if multi_scale else None
+            },
+            'template_info': {
+                'width': template_image.width,
+                'height': template_image.height,
+                'mode': template_image.mode
+            }
+        })
+        
+    except Exception as e:
+        return jsonify({'error': str(e), 'status': 'error'}), 500
+
+@app.route('/image/find_and_click', methods=['POST'])
+def find_and_click_image():
+    """画面キャプチャ内で指定された画像を検索してクリック"""
+    if not GUI_AVAILABLE:
+        return jsonify({'error': 'GUI functionality not available', 'status': 'error'}), 503
+    if not OCR_AVAILABLE:
+        return jsonify({'error': 'OpenCV functionality not available', 'status': 'error'}), 503
+    
+    try:
+        # リクエストからパラメータを取得
+        threshold = float(request.form.get('threshold', 0.8))
+        multi_scale = request.form.get('multi_scale', 'false').lower() == 'true'
+        scale_range_min = float(request.form.get('scale_range_min', 0.5))
+        scale_range_max = float(request.form.get('scale_range_max', 2.0))
+        scale_steps = int(request.form.get('scale_steps', 10))
+        button = request.form.get('button', 'left')
+        click_all = request.form.get('click_all', 'false').lower() == 'true'
+        
+        if button not in ['left', 'right', 'middle']:
+            return jsonify({'error': 'Invalid button. Use left, right, or middle', 'status': 'error'}), 400
+        
+        # アップロードされた画像ファイルを取得
+        if 'image' not in request.files:
+            return jsonify({'error': 'No image file provided', 'status': 'error'}), 400
+        
+        image_file = request.files['image']
+        if image_file.filename == '':
+            return jsonify({'error': 'No image file selected', 'status': 'error'}), 400
+        
+        # 画像ファイルを読み込み
+        try:
+            template_image = Image.open(image_file.stream)
+            if template_image.mode == 'RGBA':
+                template_image = template_image.convert('RGB')
+        except Exception as e:
+            return jsonify({'error': f'Invalid image file: {str(e)}', 'status': 'error'}), 400
+        
+        # スクリーンキャプチャ
+        screenshot = ImageGrab.grab()
+        
+        # 画像マッチングを実行
+        if multi_scale:
+            matches = find_image_multi_scale(
+                template_image, 
+                screenshot, 
+                threshold=threshold,
+                scale_range=(scale_range_min, scale_range_max),
+                scale_steps=scale_steps
+            )
+        else:
+            matches = find_image_in_screen(template_image, screenshot, threshold=threshold)
+        
+        if not matches:
+            return jsonify({
+                'status': 'not_found',
+                'message': 'Image not found in screen capture',
+                'matches': []
+            })
+        
+        # クリック実行
+        clicked_positions = []
+        targets = matches if click_all else matches[:1]
+        
+        for match in targets:
+            pyautogui.click(match['center_x'], match['center_y'], button=button)
+            clicked_positions.append(match)
+        
+        return jsonify({
+            'status': 'success',
+            'clicked': clicked_positions,
+            'total_clicked': len(clicked_positions),
+            'total_found': len(matches)
         })
         
     except Exception as e:
