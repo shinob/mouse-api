@@ -160,29 +160,157 @@ def process_image_with_tesseract(image):
         print(f"Tesseract処理エラー: {e}")
         return []
 
+def group_nearby_text(ocr_results, y_tolerance=10, x_tolerance=50):
+    """近接する文字をグルーピングして結合"""
+    if not ocr_results:
+        return ocr_results
+    
+    # Y座標でソート
+    sorted_results = sorted(ocr_results, key=lambda x: (x['bbox']['y'], x['bbox']['x']))
+    
+    grouped_results = []
+    current_group = []
+    
+    for result in sorted_results:
+        if not current_group:
+            current_group = [result]
+        else:
+            # 現在のグループの最後の要素と比較
+            last_result = current_group[-1]
+            y_diff = abs(result['bbox']['y'] - last_result['bbox']['y'])
+            x_diff = result['bbox']['x'] - (last_result['bbox']['x'] + last_result['bbox']['width'])
+            
+            # 同じ行で近接している場合はグループに追加
+            if y_diff <= y_tolerance and 0 <= x_diff <= x_tolerance:
+                current_group.append(result)
+            else:
+                # グループを完成させて新しいグループを開始
+                if len(current_group) > 1:
+                    grouped_results.append(merge_text_group(current_group))
+                else:
+                    grouped_results.extend(current_group)
+                current_group = [result]
+    
+    # 最後のグループを処理
+    if current_group:
+        if len(current_group) > 1:
+            grouped_results.append(merge_text_group(current_group))
+        else:
+            grouped_results.extend(current_group)
+    
+    return grouped_results
+
+def merge_text_group(text_group):
+    """テキストグループを一つの結果にマージ"""
+    if not text_group:
+        return None
+    
+    if len(text_group) == 1:
+        return text_group[0]
+    
+    # テキストを結合
+    combined_text = ' '.join([result['text'] for result in text_group])
+    
+    # バウンディングボックスを統合
+    min_x = min(result['bbox']['x'] for result in text_group)
+    min_y = min(result['bbox']['y'] for result in text_group)
+    max_x = max(result['bbox']['x'] + result['bbox']['width'] for result in text_group)
+    max_y = max(result['bbox']['y'] + result['bbox']['height'] for result in text_group)
+    
+    # 中心座標を計算
+    center_x = (min_x + max_x) // 2
+    center_y = (min_y + max_y) // 2
+    
+    # 平均信頼度を計算
+    avg_confidence = sum(result['confidence'] for result in text_group) / len(text_group)
+    
+    return {
+        'text': combined_text,
+        'x': center_x,
+        'y': center_y,
+        'bbox': {
+            'x': min_x,
+            'y': min_y,
+            'width': max_x - min_x,
+            'height': max_y - min_y
+        },
+        'confidence': avg_confidence,
+        'grouped_count': len(text_group)  # グループ化された文字数
+    }
+
 def find_text_positions(image, target_text, case_sensitive=False):
-    """Tesseractを使用してテキストの位置を取得"""
+    """Tesseractを使用してテキストの位置を取得（グルーピング機能付き）"""
     # Tesseractで全てのテキストと位置情報を取得
     all_results = process_image_with_tesseract(image)
     if not all_results:
         return []
+    
+    # 近接する文字をグルーピング
+    grouped_results = group_nearby_text(all_results)
     
     # 大文字小文字の処理
     search_text = target_text if case_sensitive else target_text.lower()
     
     # マッチするテキストを検索
     matches = []
-    for result in all_results:
+    
+    # 1. まず元の結果で完全一致・部分一致を検索
+    for result in grouped_results:
         found_text = result['text'] if case_sensitive else result['text'].lower()
         
         # 部分マッチまたは完全マッチをチェック
         if search_text in found_text:
-            # マッチした場合は結果に追加
             match_result = result.copy()
             match_result['matched_text'] = target_text
+            match_result['match_type'] = 'direct'
             matches.append(match_result)
     
+    # 2. 直接マッチしなかった場合、部分一致からグルーピングを試行
+    if not matches:
+        partial_matches = []
+        for result in grouped_results:
+            found_text = result['text'] if case_sensitive else result['text'].lower()
+            
+            # 部分一致をチェック
+            if any(char in found_text for char in search_text) or any(char in search_text for char in found_text):
+                partial_matches.append(result)
+        
+        # 部分一致した結果を再グルーピングして検索
+        if partial_matches:
+            # より緩い条件でグルーピング
+            regrouped = group_nearby_text(partial_matches, y_tolerance=15, x_tolerance=80)
+            
+            for result in regrouped:
+                found_text = result['text'] if case_sensitive else result['text'].lower()
+                
+                # 再グルーピング後の一致チェック
+                if search_text in found_text:
+                    match_result = result.copy()
+                    match_result['matched_text'] = target_text
+                    match_result['match_type'] = 'grouped'
+                    matches.append(match_result)
+    
+    # 3. より高度なファジーマッチング（文字の順序が保たれている場合）
+    if not matches:
+        for result in grouped_results:
+            found_text = result['text'] if case_sensitive else result['text'].lower()
+            
+            # 文字の順序を保った部分マッチング
+            if is_subsequence(search_text, found_text):
+                match_result = result.copy()
+                match_result['matched_text'] = target_text
+                match_result['match_type'] = 'subsequence'
+                matches.append(match_result)
+    
     return matches
+
+def is_subsequence(target, text):
+    """ターゲット文字列がテキスト内で順序を保って含まれているかチェック"""
+    target_idx = 0
+    for char in text:
+        if target_idx < len(target) and char == target[target_idx]:
+            target_idx += 1
+    return target_idx == len(target)
 
 def draw_ocr_overlay(image, ocr_results, target_text=None, show_all=True):
     """OCR結果を画像に重ね合わせて描画"""
@@ -200,10 +328,13 @@ def draw_ocr_overlay(image, ocr_results, target_text=None, show_all=True):
             '/usr/share/fonts/truetype/vlgothic/VL-Gothic-Regular.ttf',
             '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc',
             '/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc',
+            '/usr/share/fonts/truetype/noto/NotoSansJP-Regular.ttf',
+            '/usr/share/fonts/truetype/noto/NotoSansCJK-Bold.ttc',
             
-            # 一般的な日本語フォント
+            # 追加の日本語フォント検索パス
             '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
             '/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf',
+            '/usr/share/fonts/TTF/DejaVuSans.ttf',
             
             # macOS
             '/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc',
@@ -217,27 +348,34 @@ def draw_ocr_overlay(image, ocr_results, target_text=None, show_all=True):
             '/mnt/c/Windows/Fonts/arial.ttf',
         ]
         
+        # ダイナミックフォント検索も追加
+        import glob
+        font_dirs = ['/usr/share/fonts/**/*.ttf', '/usr/share/fonts/**/*.ttc', '/usr/share/fonts/**/*.otf']
+        for pattern in font_dirs:
+            for font_file in glob.glob(pattern, recursive=True):
+                if any(keyword in font_file.lower() for keyword in ['noto', 'cjk', 'jp', 'japan', 'gothic', 'sans']):
+                    if font_file not in japanese_font_paths:
+                        japanese_font_paths.append(font_file)
+        
         for font_path in japanese_font_paths:
             if os.path.exists(font_path):
                 try:
-                    font = ImageFont.truetype(font_path, 14)
+                    font = ImageFont.truetype(font_path, 16)  # フォントサイズを少し大きく
                     print(f"フォント使用: {font_path}")
-                    return font
+                    return font, font_path
                 except Exception as e:
                     continue
         
         # フォントが見つからない場合の対策
         try:
-            # より大きなデフォルトフォントを試す
-            from PIL import ImageFont
             font = ImageFont.load_default()
             print("デフォルトフォントを使用（日本語表示に制限があります）")
-            return font
+            return font, "default"
         except:
             print("フォント読み込みエラー")
-            return None
+            return None, None
     
-    font = find_japanese_font()
+    font, font_path = find_japanese_font()
     
     # OCR結果を描画
     for i, result in enumerate(ocr_results):
@@ -275,43 +413,92 @@ def draw_ocr_overlay(image, ocr_results, target_text=None, show_all=True):
         # バウンディングボックスを描画
         draw.rectangle([x, y, x + w, y + h], outline=box_color, width=2)
         
-        # 信頼度とテキストのラベルを作成
+        # 信頼度とテキストのラベルを作成（グルーピング情報を含む）
         label = f"{text} ({confidence:.1f}%)"
+        if 'grouped_count' in result and result['grouped_count'] > 1:
+            label += f" [G{result['grouped_count']}]"
         
         # フォントが利用可能な場合のみラベルを描画
         if font:
-            # ラベルの背景を描画
+            # 日本語テキストの表示を試行
+            display_label = label
+            text_rendered = False
+            
+            # 日本語テキストの描画を試行
             try:
-                bbox_text = draw.textbbox((0, 0), label, font=font)
-                label_width = bbox_text[2] - bbox_text[0]
-                label_height = bbox_text[3] - bbox_text[1]
-            except:
-                # 古いPillowバージョンの場合
+                # まず日本語テキストでのサイズ計算を試行
                 try:
-                    label_width, label_height = draw.textsize(label, font=font)
+                    bbox_text = draw.textbbox((0, 0), label, font=font)
+                    label_width = bbox_text[2] - bbox_text[0]
+                    label_height = bbox_text[3] - bbox_text[1]
                 except:
-                    # textsize()も利用できない場合の推定値
-                    label_width = len(label) * 8
-                    label_height = 16
-            
-            label_x = x
-            label_y = max(0, y - label_height - 2)
-            
-            # ラベル背景を描画
-            draw.rectangle([label_x, label_y, label_x + label_width, label_y + label_height], 
-                          fill=box_color)
-            
-            # テキストを描画（エラーハンドリング付き）
-            try:
-                draw.text((label_x, label_y), label, fill=text_color, font=font)
+                    # 古いPillowバージョンの場合
+                    try:
+                        label_width, label_height = draw.textsize(label, font=font)
+                    except:
+                        # textsize()も利用できない場合の推定値
+                        label_width = len(label) * 10
+                        label_height = 18
+                
+                label_x = x
+                label_y = max(0, y - label_height - 2)
+                
+                # ラベル背景を描画
+                draw.rectangle([label_x, label_y, label_x + label_width, label_y + label_height], 
+                              fill=box_color)
+                
+                # 日本語テキストの描画を試行
+                draw.text((label_x, label_y), display_label, fill=text_color, font=font)
+                text_rendered = True
+                
             except Exception as e:
-                # 日本語フォントでエラーが発生した場合はASCII文字のみで表示
-                ascii_label = f"Text ({confidence:.1f}%)"
-                draw.text((label_x, label_y), ascii_label, fill=text_color, font=font)
-        else:
+                print(f"日本語テキスト描画エラー: {e}, フォント: {font_path}")
+                
+                # フォールバック: 簡略化したラベル
+                try:
+                    # 日本語文字を含む場合は、信頼度のみ表示
+                    has_japanese = any(ord(char) > 127 for char in text)
+                    if has_japanese:
+                        fallback_label = f"[日本語] ({confidence:.1f}%)"
+                        if 'grouped_count' in result and result['grouped_count'] > 1:
+                            fallback_label += f" [G{result['grouped_count']}]"
+                    else:
+                        # ASCII文字のみの場合はそのまま表示
+                        fallback_label = f"{text} ({confidence:.1f}%)"
+                        if 'grouped_count' in result and result['grouped_count'] > 1:
+                            fallback_label += f" [G{result['grouped_count']}]"
+                    
+                    # フォールバックラベルのサイズ計算
+                    try:
+                        bbox_text = draw.textbbox((0, 0), fallback_label, font=font)
+                        label_width = bbox_text[2] - bbox_text[0]
+                        label_height = bbox_text[3] - bbox_text[1]
+                    except:
+                        label_width = len(fallback_label) * 8
+                        label_height = 16
+                    
+                    label_x = x
+                    label_y = max(0, y - label_height - 2)
+                    
+                    # ラベル背景を描画
+                    draw.rectangle([label_x, label_y, label_x + label_width, label_y + label_height], 
+                                  fill=box_color)
+                    
+                    # フォールバックテキストを描画
+                    draw.text((label_x, label_y), fallback_label, fill=text_color, font=font)
+                    text_rendered = True
+                    
+                except Exception as e2:
+                    print(f"フォールバック描画エラー: {e2}")
+                    text_rendered = False
+        
+        if not text_rendered:
             # フォントが利用できない場合は座標のみ表示
             coord_label = f"({x},{y})"
-            draw.text((x, max(0, y - 15)), coord_label, fill=text_color)
+            try:
+                draw.text((x, max(0, y - 15)), coord_label, fill=text_color)
+            except:
+                pass  # 描画エラーの場合は無視
         
         # 中心点を描画
         center_x, center_y = result['x'], result['y']
