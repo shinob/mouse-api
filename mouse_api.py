@@ -139,15 +139,44 @@ def process_image_with_tesseract(image):
             except Exception:
                 continue
         
-        # フィルタリング: 重複する結果を除去
+        # フィルタリング: 重複する結果を除去（改良版）
         filtered_results = []
         for result in best_results:
             # 既存の結果と重複していないかチェック
             is_duplicate = False
             for existing in filtered_results:
-                # 座標が近く、テキストが類似している場合は重複とみなす
-                distance = abs(result['x'] - existing['x']) + abs(result['y'] - existing['y'])
-                if distance < 20 and result['text'].lower() in existing['text'].lower():
+                # バウンディングボックスの重なりをチェック
+                curr_bbox = result['bbox']
+                exist_bbox = existing['bbox']
+                
+                # Y軸中心の計算
+                curr_y_center = curr_bbox['y'] + curr_bbox['height'] // 2
+                exist_y_center = exist_bbox['y'] + exist_bbox['height'] // 2
+                
+                # 重なりの計算
+                x_overlap = max(0, min(curr_bbox['x'] + curr_bbox['width'], exist_bbox['x'] + exist_bbox['width']) - 
+                              max(curr_bbox['x'], exist_bbox['x']))
+                y_overlap = max(0, min(curr_bbox['y'] + curr_bbox['height'], exist_bbox['y'] + exist_bbox['height']) - 
+                              max(curr_bbox['y'], exist_bbox['y']))
+                
+                # 重なり率を計算
+                curr_area = curr_bbox['width'] * curr_bbox['height']
+                exist_area = exist_bbox['width'] * exist_bbox['height']
+                overlap_area = x_overlap * y_overlap
+                
+                # 重複判定条件
+                is_significant_overlap = overlap_area > 0.5 * min(curr_area, exist_area)
+                is_same_y_center = abs(curr_y_center - exist_y_center) <= 5
+                is_similar_text = (result['text'].lower() in existing['text'].lower() or 
+                                 existing['text'].lower() in result['text'].lower())
+                
+                # 重複とみなす条件
+                if (is_significant_overlap and is_same_y_center) or \
+                   (is_similar_text and abs(result['x'] - existing['x']) < 30 and abs(result['y'] - existing['y']) < 15):
+                    # より信頼度の高い方を保持
+                    if result['confidence'] > existing['confidence']:
+                        filtered_results.remove(existing)
+                        filtered_results.append(result)
                     is_duplicate = True
                     break
             
@@ -161,7 +190,7 @@ def process_image_with_tesseract(image):
         return []
 
 def group_nearby_text(ocr_results, y_tolerance=10, x_tolerance=50):
-    """近接する文字をグルーピングして結合"""
+    """近接する文字をグルーピングして結合（重なりとY軸中心も考慮）"""
     if not ocr_results:
         return ocr_results
     
@@ -177,11 +206,48 @@ def group_nearby_text(ocr_results, y_tolerance=10, x_tolerance=50):
         else:
             # 現在のグループの最後の要素と比較
             last_result = current_group[-1]
-            y_diff = abs(result['bbox']['y'] - last_result['bbox']['y'])
-            x_diff = result['bbox']['x'] - (last_result['bbox']['x'] + last_result['bbox']['width'])
             
-            # 同じ行で近接している場合はグループに追加
-            if y_diff <= y_tolerance and 0 <= x_diff <= x_tolerance:
+            # バウンディングボックスの情報
+            curr_bbox = result['bbox']
+            last_bbox = last_result['bbox']
+            
+            # Y軸の中心を計算
+            curr_y_center = curr_bbox['y'] + curr_bbox['height'] // 2
+            last_y_center = last_bbox['y'] + last_bbox['height'] // 2
+            
+            # Y軸の差とX軸の位置関係
+            y_diff = abs(curr_bbox['y'] - last_bbox['y'])
+            y_center_diff = abs(curr_y_center - last_y_center)
+            
+            # X軸の重なりまたは近接性をチェック
+            last_right = last_bbox['x'] + last_bbox['width']
+            curr_left = curr_bbox['x']
+            curr_right = curr_bbox['x'] + curr_bbox['width']
+            last_left = last_bbox['x']
+            
+            # 重なりのチェック
+            x_overlap = max(0, min(curr_right, last_right) - max(curr_left, last_left))
+            has_x_overlap = x_overlap > 0
+            
+            # X軸の距離
+            x_gap = curr_left - last_right if curr_left > last_right else 0
+            
+            # グルーピング条件：
+            # 1. Y軸の中心が同じ（許容範囲内）で重なりがある場合
+            # 2. 従来の近接条件（Y軸の差が小さく、X軸が近接）
+            should_group = False
+            
+            if y_center_diff <= y_tolerance // 2 and has_x_overlap:
+                # Y軸中心が同じで重なりがある場合
+                should_group = True
+            elif y_diff <= y_tolerance and 0 <= x_gap <= x_tolerance:
+                # 従来の近接条件
+                should_group = True
+            elif y_center_diff <= y_tolerance and x_gap <= x_tolerance * 1.5:
+                # Y軸中心が近く、X軸の隙間も許容範囲内
+                should_group = True
+            
+            if should_group:
                 current_group.append(result)
             else:
                 # グループを完成させて新しいグループを開始
@@ -201,15 +267,48 @@ def group_nearby_text(ocr_results, y_tolerance=10, x_tolerance=50):
     return grouped_results
 
 def merge_text_group(text_group):
-    """テキストグループを一つの結果にマージ"""
+    """テキストグループを一つの結果にマージ（改良版）"""
     if not text_group:
         return None
     
     if len(text_group) == 1:
         return text_group[0]
     
-    # テキストを結合
-    combined_text = ' '.join([result['text'] for result in text_group])
+    # X座標でソートしてテキストを正しい順序で結合
+    sorted_group = sorted(text_group, key=lambda x: x['bbox']['x'])
+    
+    # テキストを結合（重なりがある場合は適切に処理）
+    combined_texts = []
+    prev_bbox = None
+    
+    for result in sorted_group:
+        current_text = result['text'].strip()
+        current_bbox = result['bbox']
+        
+        # 前のバウンディングボックスと重なりがある場合の処理
+        if prev_bbox is not None:
+            # X軸の重なりをチェック
+            prev_right = prev_bbox['x'] + prev_bbox['width']
+            curr_left = current_bbox['x']
+            
+            # 重なりがある場合はスペースを追加しない
+            if curr_left <= prev_right + 5:  # 5ピクセル以内の隙間は重なりとみなす
+                # 完全に重なっている場合は前のテキストを更新
+                if curr_left <= prev_bbox['x'] + 10:
+                    if len(current_text) > len(combined_texts[-1]):
+                        combined_texts[-1] = current_text
+                else:
+                    combined_texts.append(current_text)
+            else:
+                # 隙間がある場合はスペースを追加
+                combined_texts.append(current_text)
+        else:
+            combined_texts.append(current_text)
+        
+        prev_bbox = current_bbox
+    
+    # 重複を除去して結合
+    final_text = ' '.join(filter(None, combined_texts))
     
     # バウンディングボックスを統合
     min_x = min(result['bbox']['x'] for result in text_group)
@@ -217,15 +316,28 @@ def merge_text_group(text_group):
     max_x = max(result['bbox']['x'] + result['bbox']['width'] for result in text_group)
     max_y = max(result['bbox']['y'] + result['bbox']['height'] for result in text_group)
     
-    # 中心座標を計算
-    center_x = (min_x + max_x) // 2
-    center_y = (min_y + max_y) // 2
+    # 中心座標を計算（加重平均）
+    total_weight = sum(result['confidence'] * result['bbox']['width'] for result in text_group)
+    if total_weight > 0:
+        center_x = int(sum(result['x'] * result['confidence'] * result['bbox']['width'] 
+                          for result in text_group) / total_weight)
+        center_y = int(sum(result['y'] * result['confidence'] * result['bbox']['height'] 
+                          for result in text_group) / sum(result['confidence'] * result['bbox']['height'] 
+                          for result in text_group))
+    else:
+        center_x = (min_x + max_x) // 2
+        center_y = (min_y + max_y) // 2
     
-    # 平均信頼度を計算
-    avg_confidence = sum(result['confidence'] for result in text_group) / len(text_group)
+    # 信頼度の加重平均を計算
+    total_area = sum(result['bbox']['width'] * result['bbox']['height'] for result in text_group)
+    if total_area > 0:
+        avg_confidence = sum(result['confidence'] * result['bbox']['width'] * result['bbox']['height'] 
+                           for result in text_group) / total_area
+    else:
+        avg_confidence = sum(result['confidence'] for result in text_group) / len(text_group)
     
     return {
-        'text': combined_text,
+        'text': final_text,
         'x': center_x,
         'y': center_y,
         'bbox': {
