@@ -1148,8 +1148,22 @@ def find_and_click_image():
         return jsonify({
             'status': 'success',
             'clicked': clicked_positions,
+            'matches': matches,  # 全検索結果も含める
             'total_clicked': len(clicked_positions),
-            'total_found': len(matches)
+            'total_found': len(matches),
+            'parameters': {
+                'threshold': threshold,
+                'multi_scale': multi_scale,
+                'scale_range': [scale_range_min, scale_range_max] if multi_scale else None,
+                'scale_steps': scale_steps if multi_scale else None,
+                'button': button,
+                'click_all': click_all
+            },
+            'template_info': {
+                'width': template_image.width,
+                'height': template_image.height,
+                'mode': template_image.mode
+            }
         })
         
     except Exception as e:
