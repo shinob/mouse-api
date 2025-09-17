@@ -22,23 +22,18 @@ except Exception as e:
     print("画面キャプチャとマウス操作は無効化されます")
     GUI_AVAILABLE = False
 
-# EasyOCR機能の初期化
+# OCR機能の初期化
 try:
-    import easyocr
-    import os
-    # CPU互換性のための環境変数設定
-    os.environ['OMP_NUM_THREADS'] = '1'
-    os.environ['MKL_NUM_THREADS'] = '1'
-    
+    import pytesseract
+    import cv2
     OCR_AVAILABLE = True
-    # EasyOCRリーダーを初期化（日本語と英語をサポート、GPU無効）
-    ocr_reader = easyocr.Reader(['ja', 'en'], gpu=False, verbose=False)
-except Exception as e:
-    print(f"警告: EasyOCR機能が利用できません: {e}")
+    print("OCR機能: Tesseractを使用します")
+except ImportError as e:
+    print(f"警告: OCR機能が利用できません: {e}")
     print("文字検索機能は無効化されます")
-    print("ヒント: 古いCPUの場合は、代替OCRライブラリの使用を検討してください")
+    print("ヒント: sudo apt-get install tesseract-ocr tesseract-ocr-jpn")
+    print("       pip install pytesseract opencv-python")
     OCR_AVAILABLE = False
-    ocr_reader = None
 
 
 app = Flask(__name__)
@@ -46,55 +41,60 @@ app = Flask(__name__)
 if GUI_AVAILABLE:
     pyautogui.FAILSAFE = False
 
-def process_image_with_easyocr(image):
-    """EasyOCRを使用して画像からテキストと位置情報を取得"""
-    if not OCR_AVAILABLE or ocr_reader is None:
+def process_image_with_tesseract(image):
+    """Tesseractを使用して画像からテキストと位置情報を取得"""
+    if not OCR_AVAILABLE:
         return []
     
     try:
         # PIL ImageをNumPy配列に変換
         img_array = np.array(image)
         
-        # EasyOCRで文字認識を実行
-        results = ocr_reader.readtext(img_array)
+        # OpenCVでグレースケール変換（OCR精度向上のため）
+        if len(img_array.shape) == 3:
+            gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
+        else:
+            gray = img_array
+        
+        # Tesseractで文字認識と位置情報を取得
+        # 日本語と英語を指定
+        custom_config = r'--oem 3 --psm 6 -l jpn+eng'
+        data = pytesseract.image_to_data(gray, config=custom_config, output_type=pytesseract.Output.DICT)
         
         # 結果を標準化されたフォーマットに変換
         formatted_results = []
-        for (bbox, text, confidence) in results:
-            # バウンディングボックスの座標を取得
-            x_coords = [point[0] for point in bbox]
-            y_coords = [point[1] for point in bbox]
-            
-            x_min, x_max = min(x_coords), max(x_coords)
-            y_min, y_max = min(y_coords), max(y_coords)
-            
-            # 中心座標を計算
-            center_x = int((x_min + x_max) / 2)
-            center_y = int((y_min + y_max) / 2)
-            
-            formatted_results.append({
-                'text': text,
-                'x': center_x,
-                'y': center_y,
-                'bbox': {
-                    'x': int(x_min),
-                    'y': int(y_min),
-                    'width': int(x_max - x_min),
-                    'height': int(y_max - y_min)
-                },
-                'confidence': confidence * 100  # 0-1 を 0-100 に変換
-            })
+        n_boxes = len(data['text'])
+        for i in range(n_boxes):
+            if int(data['conf'][i]) > 0:  # 信頼度が0より大きいもののみ
+                text = data['text'][i].strip()
+                if text:  # 空文字でないもののみ
+                    x, y, w, h = data['left'][i], data['top'][i], data['width'][i], data['height'][i]
+                    center_x = x + w // 2
+                    center_y = y + h // 2
+                    
+                    formatted_results.append({
+                        'text': text,
+                        'x': center_x,
+                        'y': center_y,
+                        'bbox': {
+                            'x': x,
+                            'y': y,
+                            'width': w,
+                            'height': h
+                        },
+                        'confidence': float(data['conf'][i])
+                    })
         
         return formatted_results
         
     except Exception as e:
-        print(f"EasyOCR処理エラー: {e}")
+        print(f"Tesseract処理エラー: {e}")
         return []
 
 def find_text_positions(image, target_text, case_sensitive=False):
-    """EasyOCRを使用してテキストの位置を取得"""
-    # EasyOCRで全てのテキストと位置情報を取得
-    all_results = process_image_with_easyocr(image)
+    """Tesseractを使用してテキストの位置を取得"""
+    # Tesseractで全てのテキストと位置情報を取得
+    all_results = process_image_with_tesseract(image)
     if not all_results:
         return []
     
