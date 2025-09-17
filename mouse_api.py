@@ -1279,6 +1279,12 @@ def find_and_click_image():
         scale_steps = int(request.form.get('scale_steps', 10))
         button = request.form.get('button', 'left')
         click_all = request.form.get('click_all', 'false').lower() == 'true'
+        # クリック位置補正（中心からのオフセット）
+        try:
+            offset_x = int(float(request.form.get('offset_x', 0)))
+            offset_y = int(float(request.form.get('offset_y', 0)))
+        except ValueError:
+            return jsonify({'error': 'offset_x and offset_y must be numbers', 'status': 'error'}), 400
         
         if button not in ['left', 'right', 'middle']:
             return jsonify({'error': 'Invalid button. Use left, right, or middle', 'status': 'error'}), 400
@@ -1326,8 +1332,17 @@ def find_and_click_image():
         targets = matches if click_all else matches[:1]
         
         for match in targets:
-            pyautogui.click(match['center_x'], match['center_y'], button=button)
-            clicked_positions.append(match)
+            click_x = int(match['center_x']) + offset_x
+            click_y = int(match['center_y']) + offset_y
+            pyautogui.click(click_x, click_y, button=button)
+            clicked_info = match.copy()
+            clicked_info.update({
+                'click_x': click_x,
+                'click_y': click_y,
+                'offset_x': offset_x,
+                'offset_y': offset_y
+            })
+            clicked_positions.append(clicked_info)
         
         return jsonify({
             'status': 'success',
@@ -1341,7 +1356,9 @@ def find_and_click_image():
                 'scale_range': [scale_range_min, scale_range_max] if multi_scale else None,
                 'scale_steps': scale_steps if multi_scale else None,
                 'button': button,
-                'click_all': click_all
+                'click_all': click_all,
+                'offset_x': offset_x,
+                'offset_y': offset_y
             },
             'template_info': {
                 'width': template_image.width,
