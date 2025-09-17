@@ -956,6 +956,82 @@ def capture_screen():
     except Exception as e:
         return jsonify({'error': str(e), 'status': 'error'}), 500
 
+@app.route('/screen/capture_at_cursor', methods=['GET'])
+def capture_screen_at_cursor():
+    """現在のマウスカーソルを中心に指定サイズで画面をキャプチャ"""
+    if not GUI_AVAILABLE:
+        return jsonify({'error': 'GUI functionality not available', 'status': 'error'}), 503
+    try:
+        # クエリパラメータから幅・高さを取得
+        if 'width' not in request.args or 'height' not in request.args:
+            return jsonify({'error': 'width and height query parameters required', 'status': 'error'}), 400
+
+        try:
+            req_width = int(float(request.args.get('width')))
+            req_height = int(float(request.args.get('height')))
+        except ValueError:
+            return jsonify({'error': 'width and height must be numbers', 'status': 'error'}), 400
+
+        if req_width <= 0 or req_height <= 0:
+            return jsonify({'error': 'width and height must be positive', 'status': 'error'}), 400
+
+        # カーソル位置を取得
+        cursor_x, cursor_y = pyautogui.position()
+
+        # まずフルスクリーンを取得して境界を把握（マルチモニタでも安全）
+        full_img = ImageGrab.grab()
+        screen_w, screen_h = full_img.size
+
+        # 要求サイズから左上座標を計算（カーソル中心）
+        half_w = req_width // 2
+        half_h = req_height // 2
+        left = cursor_x - half_w
+        top = cursor_y - half_h
+        right = left + req_width
+        bottom = top + req_height
+
+        # 画面内に収まるようクリッピング
+        left = max(0, left)
+        top = max(0, top)
+        right = min(screen_w, right)
+        bottom = min(screen_h, bottom)
+
+        # クリッピング後の実サイズ（端にかかった場合に小さくなる）
+        cap_width = max(0, right - left)
+        cap_height = max(0, bottom - top)
+
+        if cap_width == 0 or cap_height == 0:
+            return jsonify({'error': 'Capture region is out of screen bounds', 'status': 'error'}), 400
+
+        # 切り出し
+        cropped = full_img.crop((left, top, right, bottom))
+
+        # Base64にエンコード
+        img_buffer = io.BytesIO()
+        cropped.save(img_buffer, format='PNG')
+        img_buffer.seek(0)
+        img_base64 = base64.b64encode(img_buffer.getvalue()).decode('utf-8')
+
+        return jsonify({
+            'status': 'success',
+            'image': img_base64,
+            'format': 'PNG',
+            'size': {'width': cap_width, 'height': cap_height},
+            'cursor': {'x': cursor_x, 'y': cursor_y},
+            'region': {
+                'left': int(left),
+                'top': int(top),
+                'right': int(right),
+                'bottom': int(bottom),
+                'width': int(cap_width),
+                'height': int(cap_height)
+            },
+            'requested': {'width': req_width, 'height': req_height}
+        })
+    
+    except Exception as e:
+        return jsonify({'error': str(e), 'status': 'error'}), 500
+
 @app.route('/text/search', methods=['POST'])
 def search_text():
     if not GUI_AVAILABLE:
