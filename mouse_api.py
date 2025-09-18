@@ -23,6 +23,16 @@ except Exception as e:
     print("画面キャプチャとマウス操作は無効化されます")
     GUI_AVAILABLE = False
 
+# OpenCV（画像マッチング機能で必要）
+try:
+    import cv2
+    OPENCV_AVAILABLE = True
+except ImportError:
+    print("警告: OpenCV機能が利用できません")
+    print("画像マッチング機能は無効化されます")
+    print("ヒント: pip install opencv-python")
+    OPENCV_AVAILABLE = False
+
 # OCR機能の初期化（APIクライアントを優先）
 try:
     from ocr_api_client import EasyOCRClient
@@ -34,16 +44,19 @@ try:
         print("OCR機能: EasyOCR APIを使用します")
     else:
         # APIが利用できない場合はTesseractにフォールバック
-        import pytesseract
-        import cv2
-        OCR_AVAILABLE = True
-        OCR_METHOD = "TESSERACT"
-        print("OCR機能: Tesseractを使用します（APIサーバーが利用できません）")
+        try:
+            import pytesseract
+            OCR_AVAILABLE = True
+            OCR_METHOD = "TESSERACT"
+            print("OCR機能: Tesseractを使用します（APIサーバーが利用できません）")
+        except ImportError:
+            print("警告: OCR機能が利用できません（API・Tesseractともに利用不可）")
+            OCR_AVAILABLE = False
+            OCR_METHOD = None
 except ImportError as e:
     try:
         # OCR APIクライアントが利用できない場合はTesseractを試行
         import pytesseract
-        import cv2
         OCR_AVAILABLE = True
         OCR_METHOD = "TESSERACT"
         print("OCR機能: Tesseractを使用します")
@@ -473,7 +486,7 @@ def is_subsequence(target, text):
 
 def find_image_in_screen(template_image, screenshot, threshold=0.8, method=cv2.TM_CCOEFF_NORMED):
     """画面キャプチャ内でテンプレート画像を検索"""
-    if not OCR_AVAILABLE:
+    if not OPENCV_AVAILABLE:
         return []
     
     try:
@@ -540,7 +553,7 @@ def find_image_in_screen(template_image, screenshot, threshold=0.8, method=cv2.T
 
 def find_image_multi_scale(template_image, screenshot, threshold=0.8, scale_range=(0.5, 2.0), scale_steps=10):
     """マルチスケール画像マッチング（異なるサイズでの検索）"""
-    if not OCR_AVAILABLE:
+    if not OPENCV_AVAILABLE:
         return []
     
     try:
@@ -1321,7 +1334,7 @@ def search_image():
     """画面キャプチャ内で指定された画像を検索"""
     if not GUI_AVAILABLE:
         return jsonify({'error': 'GUI functionality not available', 'status': 'error'}), 503
-    if not OCR_AVAILABLE:
+    if not OPENCV_AVAILABLE:
         return jsonify({'error': 'OpenCV functionality not available', 'status': 'error'}), 503
     
     try:
@@ -1389,7 +1402,7 @@ def find_and_click_image():
     """画面キャプチャ内で指定された画像を検索してクリック"""
     if not GUI_AVAILABLE:
         return jsonify({'error': 'GUI functionality not available', 'status': 'error'}), 503
-    if not OCR_AVAILABLE:
+    if not OPENCV_AVAILABLE:
         return jsonify({'error': 'OpenCV functionality not available', 'status': 'error'}), 503
     
     try:
@@ -1500,6 +1513,7 @@ def health_check():
         'gui_available': GUI_AVAILABLE,
         'ocr_available': OCR_AVAILABLE,
         'ocr_method': OCR_METHOD if OCR_AVAILABLE else None,
+        'opencv_available': OPENCV_AVAILABLE,
         'clipboard_available': 'CLIPBOARD_AVAILABLE' in globals() and CLIPBOARD_AVAILABLE
     })
 
