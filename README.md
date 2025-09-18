@@ -300,6 +300,38 @@ GET /screen/capture
 
 - `image`: Base64エンコードされた画像データ
 
+#### カーソル中心の部分キャプチャ
+
+```bash
+GET /screen/capture_at_cursor?width=640&height=480
+```
+
+**クエリ:**
+- `width` (必須): 取得したい領域の幅
+- `height` (必須): 取得したい領域の高さ
+
+カーソル位置を中心とした矩形でキャプチャします。端にかかる場合は自動で画面内にクリップされ、実際の取得サイズが小さくなることがあります。
+
+**レスポンス例:**
+```json
+{
+  "status": "success",
+  "image": "iVBORw0KGgoAAAANSUhEUgAA...",
+  "format": "PNG",
+  "size": { "width": 640, "height": 480 },
+  "cursor": { "x": 900, "y": 500 },
+  "region": {
+    "left": 580,
+    "top": 260,
+    "right": 1220,
+    "bottom": 740,
+    "width": 640,
+    "height": 480
+  },
+  "requested": { "width": 640, "height": 480 }
+}
+```
+
 #### OCR結果付きキャプチャ
 
 ```bash
@@ -877,6 +909,7 @@ if image_click_data['status'] == 'success':
 | | `/mouse/scroll` | マウススクロール |
 | | `/mouse/drag` | マウスドラッグ |
 | **画面キャプチャ** | `/screen/capture` | 基本キャプチャ |
+| | `/screen/capture_at_cursor` | カーソル中心の部分キャプチャ |
 | | `/screen/capture_with_ocr` | OCR結果付きキャプチャ |
 | **テキスト検索** | `/text/search` | OCRテキスト検索 |
 | | `/text/find_and_click` | テキスト検索＆クリック |

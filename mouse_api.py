@@ -23,18 +23,38 @@ except Exception as e:
     print("画面キャプチャとマウス操作は無効化されます")
     GUI_AVAILABLE = False
 
-# OCR機能の初期化
+# OCR機能の初期化（APIクライアントを優先）
 try:
-    import pytesseract
-    import cv2
-    OCR_AVAILABLE = True
-    print("OCR機能: Tesseractを使用します")
+    from ocr_api_client import EasyOCRClient
+    # OCR APIサーバーの可用性をチェック
+    ocr_api_client = EasyOCRClient()
+    if ocr_api_client.is_server_available():
+        OCR_AVAILABLE = True
+        OCR_METHOD = "API"
+        print("OCR機能: EasyOCR APIを使用します")
+    else:
+        # APIが利用できない場合はTesseractにフォールバック
+        import pytesseract
+        import cv2
+        OCR_AVAILABLE = True
+        OCR_METHOD = "TESSERACT"
+        print("OCR機能: Tesseractを使用します（APIサーバーが利用できません）")
 except ImportError as e:
-    print(f"警告: OCR機能が利用できません: {e}")
-    print("文字検索機能は無効化されます")
-    print("ヒント: sudo apt-get install tesseract-ocr tesseract-ocr-jpn")
-    print("       pip install pytesseract opencv-python")
-    OCR_AVAILABLE = False
+    try:
+        # OCR APIクライアントが利用できない場合はTesseractを試行
+        import pytesseract
+        import cv2
+        OCR_AVAILABLE = True
+        OCR_METHOD = "TESSERACT"
+        print("OCR機能: Tesseractを使用します")
+    except ImportError as e2:
+        print(f"警告: OCR機能が利用できません: {e}, {e2}")
+        print("文字検索機能は無効化されます")
+        print("ヒント: OCR APIサーバーを起動するか、Tesseractをインストールしてください")
+        print("       sudo apt-get install tesseract-ocr tesseract-ocr-jpn")
+        print("       pip install pytesseract opencv-python")
+        OCR_AVAILABLE = False
+        OCR_METHOD = None
 
 
 app = Flask(__name__)
@@ -360,6 +380,24 @@ def merge_text_group(text_group):
     }
 
 def find_text_positions(image, target_text, case_sensitive=False):
+    """APIまたはTesseractを使用してテキストの位置を取得"""
+    if not OCR_AVAILABLE:
+        return []
+    
+    if OCR_METHOD == "API":
+        try:
+            # OCR APIを使用
+            return ocr_api_client.find_text_positions_api(image, target_text, case_sensitive)
+        except Exception as e:
+            print(f"OCR API エラー: {e}")
+            print("Tesseractにフォールバックします")
+            # APIが失敗した場合はTesseractにフォールバック
+            return find_text_positions_tesseract(image, target_text, case_sensitive)
+    else:
+        # Tesseractを使用
+        return find_text_positions_tesseract(image, target_text, case_sensitive)
+
+def find_text_positions_tesseract(image, target_text, case_sensitive=False):
     """Tesseractを使用してテキストの位置を取得（グルーピング機能付き）"""
     # Tesseractで全てのテキストと位置情報を取得
     all_results = process_image_with_tesseract(image)
@@ -1051,7 +1089,7 @@ def search_text():
         # スクリーンキャプチャ
         screenshot = ImageGrab.grab()
         
-        # OCR APIでテキストの位置情報を取得
+        # OCR（API or Tesseract）でテキストの位置情報を取得
         matches = find_text_positions(screenshot, target_text, case_sensitive)
         
         # 信頼度でフィルタリング
@@ -1183,7 +1221,7 @@ def find_and_click_text():
         # スクリーンキャプチャ
         screenshot = ImageGrab.grab()
         
-        # OCR APIでテキストの位置情報を取得
+        # OCR（API or Tesseract）でテキストの位置情報を取得
         matches = find_text_positions(screenshot, target_text, case_sensitive)
         
         # 信頼度でフィルタリング
@@ -1230,8 +1268,16 @@ def capture_screen_with_ocr():
         # スクリーンキャプチャ
         screenshot = ImageGrab.grab()
         
-        # OCRでテキストを検出
-        ocr_results = process_image_with_tesseract(screenshot)
+        # OCR（API or Tesseract）でテキストを検出
+        if OCR_METHOD == "API":
+            try:
+                ocr_results = ocr_api_client.process_image_ocr(screenshot)
+            except Exception as e:
+                print(f"OCR API エラー: {e}")
+                print("Tesseractにフォールバックします")
+                ocr_results = process_image_with_tesseract(screenshot)
+        else:
+            ocr_results = process_image_with_tesseract(screenshot)
         
         # 信頼度でフィルタリング
         filtered_results = [result for result in ocr_results if result['confidence'] >= min_confidence]
@@ -1453,6 +1499,7 @@ def health_check():
         'service': 'mouse-api',
         'gui_available': GUI_AVAILABLE,
         'ocr_available': OCR_AVAILABLE,
+        'ocr_method': OCR_METHOD if OCR_AVAILABLE else None,
         'clipboard_available': 'CLIPBOARD_AVAILABLE' in globals() and CLIPBOARD_AVAILABLE
     })
 
