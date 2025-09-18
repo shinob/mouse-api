@@ -184,38 +184,60 @@ class EasyOCRClient:
         if not self.wait_for_completion(filename):
             raise TimeoutError("処理が時間内に完了しませんでした")
         
-        # 3. 結果取得
-        results = self.get_results(filename, "text")
+        # 3. 結果情報を取得してCSVファイル名を確認
+        result_info = self.get_results(filename, "both")
+        csv_filename = result_info.get('result_csv')
+        if not csv_filename:
+            raise Exception("CSVファイル名が取得できませんでした")
         
-        # 4. 結果をmouse_api.pyの形式に変換
+        # 4. CSVファイルをダウンロードして解析
+        csv_response = requests.get(f"{self.base_url}/download/csv/{csv_filename}")
+        csv_response.raise_for_status()
+        
+        import csv
+        import io
+        csv_content = csv_response.text
+        csv_reader = csv.DictReader(io.StringIO(csv_content))
+        
+        # 5. CSV結果をmouse_api.pyの形式に変換
         ocr_results = []
-        for result in results.get('ocr_results', []):
-            # OCR APIは x1, y1, x2, y2 形式で座標を返す
-            x1 = int(result.get('x1', 0))
-            y1 = int(result.get('y1', 0))
-            x2 = int(result.get('x2', 0))
-            y2 = int(result.get('y2', 0))
-            
-            # 中心座標を計算
-            center_x = (x1 + x2) // 2
-            center_y = (y1 + y2) // 2
-            
-            # 幅と高さを計算
-            width = x2 - x1
-            height = y2 - y1
-            
-            ocr_results.append({
-                'text': result.get('text', ''),
-                'x': center_x,
-                'y': center_y,
-                'bbox': {
-                    'x': x1,
-                    'y': y1,
-                    'width': width,
-                    'height': height
-                },
-                'confidence': float(result.get('confidence', 0))
-            })
+        for row in csv_reader:
+            try:
+                # CSVから座標を取得
+                x1 = float(row.get('x1', 0))
+                y1 = float(row.get('y1', 0))
+                x2 = float(row.get('x2', 0))
+                y2 = float(row.get('y2', 0))
+                confidence = float(row.get('confidence', 0))
+                text = row.get('text', '').strip()
+                
+                # 空のテキストはスキップ
+                if not text:
+                    continue
+                
+                # 中心座標を計算
+                center_x = int((x1 + x2) / 2)
+                center_y = int((y1 + y2) / 2)
+                
+                # 幅と高さを計算
+                width = int(x2 - x1)
+                height = int(y2 - y1)
+                
+                ocr_results.append({
+                    'text': text,
+                    'x': center_x,
+                    'y': center_y,
+                    'bbox': {
+                        'x': int(x1),
+                        'y': int(y1),
+                        'width': width,
+                        'height': height
+                    },
+                    'confidence': confidence
+                })
+            except (ValueError, TypeError) as e:
+                # 座標変換エラーの場合はスキップ
+                continue
         
         return ocr_results
     
