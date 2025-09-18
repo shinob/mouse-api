@@ -190,28 +190,31 @@ class EasyOCRClient:
         # 4. 結果をmouse_api.pyの形式に変換
         ocr_results = []
         for result in results.get('ocr_results', []):
-            # バウンディングボックスをパース
-            bbox_str = result.get('bbox', '0,0,0,0')
-            bbox_parts = bbox_str.split(',')
-            if len(bbox_parts) == 4:
-                x, y, w, h = map(int, bbox_parts)
-                center_x = x + w // 2
-                center_y = y + h // 2
-            else:
-                x = y = w = h = 0
-                center_x = center_y = 0
+            # OCR APIは x1, y1, x2, y2 形式で座標を返す
+            x1 = int(result.get('x1', 0))
+            y1 = int(result.get('y1', 0))
+            x2 = int(result.get('x2', 0))
+            y2 = int(result.get('y2', 0))
+            
+            # 中心座標を計算
+            center_x = (x1 + x2) // 2
+            center_y = (y1 + y2) // 2
+            
+            # 幅と高さを計算
+            width = x2 - x1
+            height = y2 - y1
             
             ocr_results.append({
                 'text': result.get('text', ''),
                 'x': center_x,
                 'y': center_y,
                 'bbox': {
-                    'x': x,
-                    'y': y,
-                    'width': w,
-                    'height': h
+                    'x': x1,
+                    'y': y1,
+                    'width': width,
+                    'height': height
                 },
-                'confidence': float(result.get('confidence', '0'))
+                'confidence': float(result.get('confidence', 0))
             })
         
         return ocr_results
