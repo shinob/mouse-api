@@ -15,7 +15,7 @@ from PIL import Image
 class EasyOCRClient:
     """EasyOCR APIのクライアントクラス"""
     
-    def __init__(self, base_url: str = "http://localhost:8000"):
+    def __init__(self, base_url: str = "http://localhost:3000"):
         """
         クライアントを初期化
         
