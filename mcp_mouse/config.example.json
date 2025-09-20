@@ -1,0 +1,14 @@
+{
+  "defaultServer": "local",
+  "servers": {
+    "local": {
+      "baseUrl": "http://localhost:5000",
+      "headers": {}
+    },
+    "ipv6": {
+      "baseUrl": "http://[::1]:5000",
+      "headers": {}
+    }
+  }
+}
+
