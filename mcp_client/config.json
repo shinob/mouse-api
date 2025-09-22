@@ -1,0 +1,17 @@
+{
+  "ollama": {
+    "host": "http://localhost:11434",
+    "model": "gpt-oss:20b"
+  },
+  "mouse_api": {
+    "host": "http://localhost:8000",
+    "enabled": true
+  },
+  "server": {
+    "host": "localhost",
+    "port": 8080
+  },
+  "logging": {
+    "level": "INFO"
+  }
+}
