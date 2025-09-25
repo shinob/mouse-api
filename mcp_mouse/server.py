@@ -286,6 +286,9 @@ config = Config()
 OUTPUT_DIR = (Path(__file__).parent / "output").resolve()
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
+# Directory containing reference images for pattern matching
+IMAGES_DIR = (Path(__file__).parent.parent / "imgs").resolve()
+
 
 def _save_base64_image_to_png(b64: str, filename_prefix: str) -> str:
     """Decode base64 image bytes (any format) and save as PNG.
@@ -324,6 +327,21 @@ def _with_saved_image(resp: Dict[str, Any], filename_prefix: str) -> Dict[str, A
             resp = dict(resp)
             resp["image_decode_error"] = str(e)
     return resp
+
+
+def _resolve_image_path(image_path: str) -> Path:
+    """画像パスを解決します。相対パスの場合はimgsディレクトリを基準に解決します。"""
+    path = Path(image_path)
+    if path.is_absolute():
+        return path
+    
+    # 相対パスの場合、まずimgsディレクトリから探す
+    imgs_path = IMAGES_DIR / image_path
+    if imgs_path.exists():
+        return imgs_path
+    
+    # imgsディレクトリに見つからない場合は通常の相対パス解決
+    return path
 
 
 def _client_for(server_name: Optional[str]) -> MouseApiClient:
@@ -532,11 +550,12 @@ async def image_search(
     scale_range_max: Optional[float] = None,
     scale_steps: Optional[int] = None,
 ) -> Dict[str, Any]:
-    """画面内の指定された画像を検索します"""
+    """画面内の指定された画像を検索します。相対パスを指定するとimgsディレクトリから自動的に検索します。"""
     cli = _client_for(server)
     try:
+        resolved_path = _resolve_image_path(image_path)
         return await cli.image_search(
-            Path(image_path), threshold, multi_scale, scale_range_min, scale_range_max, scale_steps
+            resolved_path, threshold, multi_scale, scale_range_min, scale_range_max, scale_steps
         )
     finally:
         await cli.aclose()
@@ -553,12 +572,33 @@ async def image_find_and_click(
     offset_x: Optional[int] = None,
     offset_y: Optional[int] = None,
 ) -> Dict[str, Any]:
-    """指定された画像を検索してクリックします"""
+    """指定された画像を検索してクリックします。相対パスを指定するとimgsディレクトリから自動的に検索します。"""
     cli = _client_for(server)
     try:
-        return await cli.image_find_and_click(Path(image_path), threshold, multi_scale, button, click_all, offset_x, offset_y)
+        resolved_path = _resolve_image_path(image_path)
+        return await cli.image_find_and_click(resolved_path, threshold, multi_scale, button, click_all, offset_x, offset_y)
     finally:
         await cli.aclose()
+
+
+@mcp.tool()
+async def list_images() -> Dict[str, Any]:
+    """利用可能なパターンマッチング用画像を一覧表示します"""
+    result: Dict[str, Any] = {
+        "images_directory": str(IMAGES_DIR),
+        "available_images": []
+    }
+    
+    if IMAGES_DIR.exists():
+        for img_file in IMAGES_DIR.glob("*"):
+            if img_file.is_file() and img_file.suffix.lower() in {'.png', '.jpg', '.jpeg', '.bmp', '.gif'}:
+                result["available_images"].append({
+                    "filename": img_file.name,
+                    "relative_path": img_file.name,
+                    "full_path": str(img_file)
+                })
+    
+    return result
 
 
 @mcp.tool()
