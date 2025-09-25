@@ -287,7 +287,7 @@ OUTPUT_DIR = (Path(__file__).parent / "output").resolve()
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 # Directory containing reference images for pattern matching
-IMAGES_DIR = (Path(__file__).parent.parent / "imgs").resolve()
+IMAGES_DIR = (Path(__file__).parent / "imgs").resolve()
 
 
 def _save_base64_image_to_png(b64: str, filename_prefix: str) -> str:
