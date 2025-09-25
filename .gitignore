@@ -66,6 +66,8 @@ screenshot_ocr_*.png
 
 # Configuration files with sensitive data
 config.ini
+config.json
+**/config.json
 secrets.txt
 .env
 .env.local

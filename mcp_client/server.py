@@ -12,12 +12,14 @@ def json_dumps(obj):
 
 class MCPServer:
     def __init__(self, host: str = "localhost", port: int = 8080, ollama_host: str = "http://localhost:11434", 
-                 model: str = "gpt-oss:20b", mouse_api_host: str = "http://localhost:8000", enable_mouse: bool = True):
+                 model: str = "gpt-oss:20b", mouse_api_host: str = "http://localhost:8000", 
+                 mouse_api_key: str = None, enable_mouse: bool = True):
         self.host = host
         self.port = port
         self.ollama_host = ollama_host
         self.model = model
         self.mouse_api_host = mouse_api_host
+        self.mouse_api_key = mouse_api_key
         self.enable_mouse = enable_mouse
         self.app = web.Application()
         self.setup_routes()
@@ -53,7 +55,7 @@ class MCPServer:
             )
             
             if self.enable_mouse:
-                async with MouseCapableOllamaClient(self.ollama_host, self.model, self.mouse_api_host) as client:
+                async with MouseCapableOllamaClient(self.ollama_host, self.model, self.mouse_api_host, self.mouse_api_key) as client:
                     await client.initialize()
                     result = await client.handle_mcp_message(message)
                     return web.json_response(result, dumps=json_dumps)
@@ -78,7 +80,7 @@ class MCPServer:
             enable_mouse_actions = data.get('enable_mouse_actions', True)
             
             if self.enable_mouse:
-                async with MouseCapableOllamaClient(self.ollama_host, self.model, self.mouse_api_host) as client:
+                async with MouseCapableOllamaClient(self.ollama_host, self.model, self.mouse_api_host, self.mouse_api_key) as client:
                     await client.initialize()
                     result = await client.send_enhanced_prompt(prompt, enable_mouse_actions)
                     return web.json_response(result, dumps=json_dumps)
@@ -249,7 +251,32 @@ class MCPServer:
 async def main():
     """Main function to run the server"""
     logging.basicConfig(level=logging.INFO)
-    server = MCPServer()
+    
+    # Load configuration
+    try:
+        with open('config.json', 'r') as f:
+            config = json.load(f)
+        
+        ollama_config = config.get('ollama', {})
+        mouse_config = config.get('mouse_api', {})
+        server_config = config.get('server', {})
+        
+        server = MCPServer(
+            host=server_config.get('host', 'localhost'),
+            port=server_config.get('port', 8080),
+            ollama_host=ollama_config.get('host', 'http://localhost:11434'),
+            model=ollama_config.get('model', 'gpt-oss:20b'),
+            mouse_api_host=mouse_config.get('host', 'http://localhost:8000'),
+            mouse_api_key=mouse_config.get('api_key'),
+            enable_mouse=mouse_config.get('enabled', True)
+        )
+    except FileNotFoundError:
+        print("config.json not found, using default settings")
+        server = MCPServer()
+    except Exception as e:
+        print(f"Error loading config: {e}, using default settings")
+        server = MCPServer()
+    
     runner = await server.start_server()
     
     try:

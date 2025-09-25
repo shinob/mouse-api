@@ -14,10 +14,12 @@ class MouseCapableOllamaClient(OllamaMCPClient):
     """
     
     def __init__(self, ollama_host: str = "http://localhost:11434", model: str = "gpt-oss:20b", 
-                 mouse_api_host: str = "http://localhost:8000"):
+                 mouse_api_host: str = "http://localhost:8000", mouse_api_key: str = None):
         super().__init__(ollama_host, model)
         self.mouse_api_host = mouse_api_host
+        self.mouse_api_key = mouse_api_key
         self.mouse_tools_enabled = True
+        self.mouse_headers = {"X-API-Key": mouse_api_key} if mouse_api_key else {}
         
     async def initialize(self) -> Dict[str, Any]:
         """Initialize both Ollama and mouse API connections"""
@@ -27,7 +29,7 @@ class MouseCapableOllamaClient(OllamaMCPClient):
         # Check mouse API availability
         try:
             url = f"{self.mouse_api_host}/health"
-            async with self.session.get(url) as response:
+            async with self.session.get(url, headers=self.mouse_headers) as response:
                 if response.status == 200:
                     result["mouse_api_available"] = True
                     self.logger.info("Mouse API connection established")
@@ -254,12 +256,12 @@ IMPORTANT: 日本語で自然な会話形式で回答してください。マウ
         
         # GET requests for certain actions
         if action in ['screen_capture', 'mouse_position', 'health']:
-            async with self.session.get(url, params=params) as response:
+            async with self.session.get(url, params=params, headers=self.mouse_headers) as response:
                 response.raise_for_status()
                 return await response.json()
         elif action == 'screen_capture_at_cursor':
             # Special handling for cursor capture with query params
-            async with self.session.get(url, params=params) as response:
+            async with self.session.get(url, params=params, headers=self.mouse_headers) as response:
                 response.raise_for_status()
                 return await response.json()
         elif action in ['image_search', 'image_find_and_click']:
@@ -267,7 +269,7 @@ IMPORTANT: 日本語で自然な会話形式で回答してください。マウ
             return await self._handle_image_upload_action(action, params)
         else:
             # POST requests for actions with parameters
-            async with self.session.post(url, json=params) as response:
+            async with self.session.post(url, json=params, headers={**self.mouse_headers, "Content-Type": "application/json"}) as response:
                 response.raise_for_status()
                 return await response.json()
     
@@ -357,7 +359,7 @@ IMPORTANT: 日本語で自然な会話形式で回答してください。マウ
                 else:
                     data[key] = str(value)
         
-        async with self.session.post(url, files=files, data=data) as response:
+        async with self.session.post(url, files=files, data=data, headers=self.mouse_headers) as response:
             response.raise_for_status()
             return await response.json()
     

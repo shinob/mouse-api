@@ -1,12 +1,17 @@
 #!/usr/bin/env python3
 import os
 import io
+import json
 import base64
 import argparse
 import numpy as np
 import requests
 import time
 import tempfile
+import logging
+import secrets
+from datetime import datetime
+from functools import wraps
 from flask import Flask, jsonify, request
 from PIL import Image, ImageDraw, ImageFont
 
@@ -71,6 +76,99 @@ except ImportError as e:
 
 
 app = Flask(__name__)
+
+# セキュリティ設定とログ設定の初期化
+def load_config():
+    """設定ファイルとAPIキーを読み込み"""
+    config = {}
+    api_keys = []
+    
+    # config.jsonから設定を読み込み
+    try:
+        with open('config.json', 'r') as f:
+            config = json.load(f)
+            if config.get('security', {}).get('api_keys'):
+                api_keys = config['security']['api_keys']
+    except FileNotFoundError:
+        print("警告: config.json が見つかりません。デフォルト設定を使用します。")
+    
+    # 環境変数からAPIキーを読み込み（優先）
+    env_api_key = os.getenv('API_KEY')
+    if env_api_key:
+        api_keys = [env_api_key]
+    
+    # APIキーが設定されていない場合の警告
+    if not api_keys or api_keys == ["your-secure-api-key-here-change-this"]:
+        print("🚨 警告: APIキーが設定されていません！")
+        print("セキュリティのため、.env ファイルまたは config.json でAPIキーを設定してください。")
+        print("例: export API_KEY=your-very-secure-random-api-key")
+        
+        # デモ用のランダムAPIキーを生成（本番では使用しない）
+        demo_key = secrets.token_urlsafe(32)
+        print(f"デモ用APIキー（この起動でのみ有効）: {demo_key}")
+        api_keys = [demo_key]
+    
+    return config, api_keys
+
+# 設定とAPIキーの読み込み
+CONFIG, VALID_API_KEYS = load_config()
+
+# セキュリティ設定
+REQUIRE_API_KEY = CONFIG.get('security', {}).get('require_api_key', True)
+
+# ログ設定
+LOG_LEVEL = CONFIG.get('logging', {}).get('level', 'INFO')
+LOG_REQUESTS = CONFIG.get('logging', {}).get('log_requests', True)
+LOG_FILE = CONFIG.get('logging', {}).get('log_file', 'mouse_api.log')
+
+# ログ設定を初期化
+logging.basicConfig(
+    level=getattr(logging, LOG_LEVEL),
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler(LOG_FILE),
+        logging.StreamHandler()
+    ]
+)
+
+logger = logging.getLogger('mouse_api')
+security_logger = logging.getLogger('security')
+
+# APIキー認証デコレータ
+def require_api_key(f):
+    """APIキー認証が必要なエンドポイントに適用するデコレータ"""
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if not REQUIRE_API_KEY:
+            return f(*args, **kwargs)
+        
+        # APIキーの確認（ヘッダーまたはクエリパラメータから）
+        api_key = request.headers.get('X-API-Key') or request.args.get('api_key')
+        
+        if not api_key:
+            security_logger.warning(f"認証失敗 - APIキーなし from {request.remote_addr} to {request.path}")
+            return jsonify({
+                'error': 'API key required',
+                'message': 'X-API-Key ヘッダーまたは api_key パラメータでAPIキーを指定してください'
+            }), 401
+        
+        if api_key not in VALID_API_KEYS:
+            security_logger.warning(f"認証失敗 - 無効なAPIキー from {request.remote_addr} to {request.path}")
+            return jsonify({
+                'error': 'Invalid API key',
+                'message': '無効なAPIキーです'
+            }), 401
+        
+        security_logger.info(f"認証成功 from {request.remote_addr} to {request.path}")
+        return f(*args, **kwargs)
+    
+    return decorated_function
+
+# リクエストログ記録
+@app.before_request
+def log_request_info():
+    if LOG_REQUESTS:
+        logger.info(f"Request from {request.remote_addr}: {request.method} {request.path}")
 
 if GUI_AVAILABLE:
     pyautogui.FAILSAFE = False
@@ -827,6 +925,7 @@ def draw_ocr_overlay(image, ocr_results, target_text=None, show_all=True):
     return overlay_image
 
 @app.route('/mouse/position', methods=['GET'])
+@require_api_key
 def get_mouse_position():
     if not GUI_AVAILABLE:
         return jsonify({'error': 'GUI functionality not available', 'status': 'error'}), 503
@@ -837,6 +936,7 @@ def get_mouse_position():
         return jsonify({'error': str(e), 'status': 'error'}), 500
 
 @app.route('/mouse/move', methods=['POST'])
+@require_api_key
 def move_mouse():
     if not GUI_AVAILABLE:
         return jsonify({'error': 'GUI functionality not available', 'status': 'error'}), 503
@@ -855,6 +955,7 @@ def move_mouse():
         return jsonify({'error': str(e), 'status': 'error'}), 500
 
 @app.route('/mouse/click', methods=['POST'])
+@require_api_key
 def click_mouse():
     if not GUI_AVAILABLE:
         return jsonify({'error': 'GUI functionality not available', 'status': 'error'}), 503
@@ -877,6 +978,7 @@ def click_mouse():
         return jsonify({'error': str(e), 'status': 'error'}), 500
 
 @app.route('/mouse/scroll', methods=['POST'])
+@require_api_key
 def scroll_mouse():
     """マウスホイールスクロール"""
     if not GUI_AVAILABLE:
@@ -935,6 +1037,7 @@ def scroll_mouse():
         return jsonify({'error': str(e), 'status': 'error'}), 500
 
 @app.route('/mouse/drag', methods=['POST'])
+@require_api_key
 def drag_mouse():
     """マウスドラッグ操作"""
     if not GUI_AVAILABLE:
@@ -986,6 +1089,7 @@ def drag_mouse():
         return jsonify({'error': str(e), 'status': 'error'}), 500
 
 @app.route('/screen/capture', methods=['GET'])
+@require_api_key
 def capture_screen():
     if not GUI_AVAILABLE:
         return jsonify({'error': 'GUI functionality not available', 'status': 'error'}), 503
@@ -1008,6 +1112,7 @@ def capture_screen():
         return jsonify({'error': str(e), 'status': 'error'}), 500
 
 @app.route('/screen/capture_at_cursor', methods=['GET'])
+@require_api_key
 def capture_screen_at_cursor():
     """現在のマウスカーソルを中心に指定サイズで画面をキャプチャ"""
     if not GUI_AVAILABLE:
@@ -1125,6 +1230,7 @@ def adjust_coordinates_for_region(matches, region_coords):
     return adjusted_matches
 
 @app.route('/text/search', methods=['POST'])
+@require_api_key
 def search_text():
     if not GUI_AVAILABLE:
         return jsonify({'error': 'GUI functionality not available', 'status': 'error'}), 503
@@ -1196,6 +1302,7 @@ def search_text():
         return jsonify({'error': str(e), 'status': 'error'}), 500
 
 @app.route('/text/type', methods=['POST'])
+@require_api_key
 def type_text():
     if not GUI_AVAILABLE:
         return jsonify({'error': 'GUI functionality not available', 'status': 'error'}), 503
@@ -1289,6 +1396,7 @@ def type_text():
         return jsonify({'error': str(e), 'status': 'error'}), 500
 
 @app.route('/text/find_and_click', methods=['POST'])
+@require_api_key
 def find_and_click_text():
     if not GUI_AVAILABLE:
         return jsonify({'error': 'GUI functionality not available', 'status': 'error'}), 503
@@ -1343,6 +1451,7 @@ def find_and_click_text():
         return jsonify({'error': str(e), 'status': 'error'}), 500
 
 @app.route('/screen/capture_with_ocr', methods=['POST'])
+@require_api_key
 def capture_screen_with_ocr():
     """スクリーンキャプチャしてOCR結果を重ね合わせた画像を返す"""
     if not GUI_AVAILABLE:
@@ -1408,6 +1517,7 @@ def capture_screen_with_ocr():
         return jsonify({'error': str(e), 'status': 'error'}), 500
 
 @app.route('/text/ocr', methods=['POST'])
+@require_api_key
 def extract_text_only():
     """スクリーンキャプチャしてOCRテキストのみを返す（画像は含まない）"""
     if not GUI_AVAILABLE:
@@ -1489,6 +1599,7 @@ def extract_text_only():
         return jsonify({'error': str(e), 'status': 'error'}), 500
 
 @app.route('/image/search', methods=['POST'])
+@require_api_key
 def search_image():
     """画面キャプチャ内で指定された画像を検索"""
     if not GUI_AVAILABLE:
@@ -1557,6 +1668,7 @@ def search_image():
         return jsonify({'error': str(e), 'status': 'error'}), 500
 
 @app.route('/image/find_and_click', methods=['POST'])
+@require_api_key
 def find_and_click_image():
     """画面キャプチャ内で指定された画像を検索してクリック"""
     if not GUI_AVAILABLE:
@@ -1676,8 +1788,41 @@ def health_check():
         'ocr_available': OCR_AVAILABLE,
         'ocr_method': OCR_METHOD if OCR_AVAILABLE else None,
         'opencv_available': OPENCV_AVAILABLE,
-        'clipboard_available': 'CLIPBOARD_AVAILABLE' in globals() and CLIPBOARD_AVAILABLE
+        'clipboard_available': 'CLIPBOARD_AVAILABLE' in globals() and CLIPBOARD_AVAILABLE,
+        'security': {
+            'api_key_required': REQUIRE_API_KEY,
+            'authenticated': not REQUIRE_API_KEY or (
+                request.headers.get('X-API-Key') in VALID_API_KEYS or 
+                request.args.get('api_key') in VALID_API_KEYS
+            )
+        }
     })
+
+# エラーハンドラー
+@app.errorhandler(401)
+def unauthorized(error):
+    return jsonify({
+        'error': 'Unauthorized',
+        'message': 'APIキーが必要です。X-API-Keyヘッダーまたはapi_keyパラメータで指定してください。',
+        'status': 'error'
+    }), 401
+
+@app.errorhandler(403)
+def forbidden(error):
+    return jsonify({
+        'error': 'Forbidden',
+        'message': 'アクセスが拒否されました',
+        'status': 'error'
+    }), 403
+
+@app.errorhandler(500)
+def internal_error(error):
+    logger.error(f"Internal server error: {error}")
+    return jsonify({
+        'error': 'Internal Server Error',
+        'message': 'サーバー内部エラーが発生しました',
+        'status': 'error'
+    }), 500
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Mouse API Server')

@@ -5,7 +5,8 @@
   },
   "mouse_api": {
     "host": "http://localhost:8000",
-    "enabled": true
+    "enabled": true,
+    "api_key": "your-api-key-here"
   },
   "server": {
     "host": "localhost",

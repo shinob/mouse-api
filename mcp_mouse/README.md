@@ -26,15 +26,27 @@ cp mcp_mouse/config.example.json mcp_mouse/config.json
 
 例:
 
-```
+```json
 {
   "defaultServer": "local",
   "servers": {
-    "local": { "baseUrl": "http://localhost:5000" },
-    "desk01": { "baseUrl": "http://desk01.local:5000" }
+    "local": { 
+      "baseUrl": "http://localhost:5000",
+      "headers": {
+        "X-API-Key": "your-api-key-here"
+      }
+    },
+    "desk01": { 
+      "baseUrl": "http://desk01.local:5000",
+      "headers": {
+        "X-API-Key": "your-api-key-here"
+      }
+    }
   }
 }
 ```
+
+**重要**: Mouse APIサーバーでAPIキー認証が有効な場合は、`headers`に`X-API-Key`を設定してください。
 
 環境変数 `MOUSE_MCP_CONFIG` で設定ファイルパスを上書きできます。
 
