@@ -1667,6 +1667,324 @@ def search_image():
     except Exception as e:
         return jsonify({'error': str(e), 'status': 'error'}), 500
 
+@app.route('/image/nested_search', methods=['POST'])
+@require_api_key
+def nested_image_search():
+    """二段階画像検索: 最初の画像を検索し、その範囲内で二番目の画像を検索"""
+    if not GUI_AVAILABLE:
+        return jsonify({'error': 'GUI functionality not available', 'status': 'error'}), 503
+    if not OPENCV_AVAILABLE:
+        return jsonify({'error': 'OpenCV functionality not available', 'status': 'error'}), 503
+    
+    try:
+        # リクエストからパラメータを取得
+        parent_threshold = float(request.form.get('parent_threshold', 0.8))
+        child_threshold = float(request.form.get('child_threshold', 0.8))
+        parent_multi_scale = request.form.get('parent_multi_scale', 'false').lower() == 'true'
+        child_multi_scale = request.form.get('child_multi_scale', 'false').lower() == 'true'
+        
+        # 検索範囲の拡張マージン（ピクセル）
+        margin_x = int(request.form.get('margin_x', 0))
+        margin_y = int(request.form.get('margin_y', 0))
+        
+        # アップロードされた画像ファイルを取得
+        if 'parent_image' not in request.files or 'child_image' not in request.files:
+            return jsonify({'error': 'Both parent_image and child_image files required', 'status': 'error'}), 400
+        
+        parent_file = request.files['parent_image']
+        child_file = request.files['child_image']
+        
+        if parent_file.filename == '' or child_file.filename == '':
+            return jsonify({'error': 'Both image files must be selected', 'status': 'error'}), 400
+        
+        # 画像ファイルを読み込み
+        try:
+            parent_image = Image.open(parent_file.stream)
+            child_image = Image.open(child_file.stream)
+            if parent_image.mode == 'RGBA':
+                parent_image = parent_image.convert('RGB')
+            if child_image.mode == 'RGBA':
+                child_image = child_image.convert('RGB')
+        except Exception as e:
+            return jsonify({'error': f'Invalid image file: {str(e)}', 'status': 'error'}), 400
+        
+        # スクリーンキャプチャ
+        screenshot = ImageGrab.grab()
+        
+        # 第一段階: 親画像を検索
+        if parent_multi_scale:
+            parent_matches = find_image_multi_scale(parent_image, screenshot, threshold=parent_threshold)
+        else:
+            parent_matches = find_image_in_screen(parent_image, screenshot, threshold=parent_threshold)
+        
+        if not parent_matches:
+            return jsonify({
+                'status': 'parent_not_found',
+                'message': 'Parent image not found in screen capture',
+                'parent_matches': [],
+                'child_matches': []
+            })
+        
+        # 第二段階: 各親画像の範囲内で子画像を検索
+        all_child_matches = []
+        
+        for i, parent_match in enumerate(parent_matches):
+            # 親画像の範囲を計算（マージンを含む）
+            parent_left = max(0, parent_match['top_left_x'] - margin_x)
+            parent_top = max(0, parent_match['top_left_y'] - margin_y)
+            parent_right = min(screenshot.width, parent_match['top_left_x'] + parent_match['width'] + margin_x)
+            parent_bottom = min(screenshot.height, parent_match['top_left_y'] + parent_match['height'] + margin_y)
+            
+            # 親画像範囲を切り出し
+            parent_region = screenshot.crop((parent_left, parent_top, parent_right, parent_bottom))
+            
+            # 親画像範囲内で子画像を検索
+            if child_multi_scale:
+                child_matches_in_region = find_image_multi_scale(child_image, parent_region, threshold=child_threshold)
+            else:
+                child_matches_in_region = find_image_in_screen(child_image, parent_region, threshold=child_threshold)
+            
+            # 座標を全画面座標に変換
+            for child_match in child_matches_in_region:
+                child_match['center_x'] += parent_left
+                child_match['center_y'] += parent_top
+                child_match['top_left_x'] += parent_left
+                child_match['top_left_y'] += parent_top
+                child_match['parent_match_index'] = i
+                child_match['parent_match_id'] = f"parent_{i}"
+                
+                # 親画像の情報を追加
+                child_match['parent_info'] = {
+                    'center_x': parent_match['center_x'],
+                    'center_y': parent_match['center_y'],
+                    'confidence': parent_match['confidence'],
+                    'search_region': {
+                        'left': parent_left,
+                        'top': parent_top,
+                        'right': parent_right,
+                        'bottom': parent_bottom,
+                        'width': parent_right - parent_left,
+                        'height': parent_bottom - parent_top
+                    }
+                }
+                
+                all_child_matches.append(child_match)
+        
+        # 結果をソート（信頼度順）
+        all_child_matches.sort(key=lambda x: x['confidence'], reverse=True)
+        
+        return jsonify({
+            'status': 'success',
+            'parent_matches': parent_matches,
+            'child_matches': all_child_matches,
+            'total_parent_found': len(parent_matches),
+            'total_child_found': len(all_child_matches),
+            'parameters': {
+                'parent_threshold': parent_threshold,
+                'child_threshold': child_threshold,
+                'parent_multi_scale': parent_multi_scale,
+                'child_multi_scale': child_multi_scale,
+                'margin_x': margin_x,
+                'margin_y': margin_y
+            },
+            'images_info': {
+                'parent': {
+                    'width': parent_image.width,
+                    'height': parent_image.height,
+                    'mode': parent_image.mode
+                },
+                'child': {
+                    'width': child_image.width,
+                    'height': child_image.height,
+                    'mode': child_image.mode
+                }
+            }
+        })
+        
+    except Exception as e:
+        return jsonify({'error': str(e), 'status': 'error'}), 500
+
+@app.route('/image/nested_find_and_click', methods=['POST'])
+@require_api_key
+def nested_find_and_click_image():
+    """二段階画像検索してクリック: 最初の画像を検索し、その範囲内で二番目の画像を検索してクリック"""
+    if not GUI_AVAILABLE:
+        return jsonify({'error': 'GUI functionality not available', 'status': 'error'}), 503
+    if not OPENCV_AVAILABLE:
+        return jsonify({'error': 'OpenCV functionality not available', 'status': 'error'}), 503
+    
+    try:
+        # リクエストからパラメータを取得
+        parent_threshold = float(request.form.get('parent_threshold', 0.8))
+        child_threshold = float(request.form.get('child_threshold', 0.8))
+        parent_multi_scale = request.form.get('parent_multi_scale', 'false').lower() == 'true'
+        child_multi_scale = request.form.get('child_multi_scale', 'false').lower() == 'true'
+        
+        # 検索範囲の拡張マージン（ピクセル）
+        margin_x = int(request.form.get('margin_x', 0))
+        margin_y = int(request.form.get('margin_y', 0))
+        
+        # クリックオプション
+        button = request.form.get('button', 'left')
+        click_all = request.form.get('click_all', 'false').lower() == 'true'
+        offset_x = int(request.form.get('offset_x', 0))
+        offset_y = int(request.form.get('offset_y', 0))
+        
+        if button not in ['left', 'right', 'middle']:
+            return jsonify({'error': 'Invalid button. Use left, right, or middle', 'status': 'error'}), 400
+        
+        # アップロードされた画像ファイルを取得
+        if 'parent_image' not in request.files or 'child_image' not in request.files:
+            return jsonify({'error': 'Both parent_image and child_image files required', 'status': 'error'}), 400
+        
+        parent_file = request.files['parent_image']
+        child_file = request.files['child_image']
+        
+        if parent_file.filename == '' or child_file.filename == '':
+            return jsonify({'error': 'Both image files must be selected', 'status': 'error'}), 400
+        
+        # 画像ファイルを読み込み
+        try:
+            parent_image = Image.open(parent_file.stream)
+            child_image = Image.open(child_file.stream)
+            if parent_image.mode == 'RGBA':
+                parent_image = parent_image.convert('RGB')
+            if child_image.mode == 'RGBA':
+                child_image = child_image.convert('RGB')
+        except Exception as e:
+            return jsonify({'error': f'Invalid image file: {str(e)}', 'status': 'error'}), 400
+        
+        # スクリーンキャプチャ
+        screenshot = ImageGrab.grab()
+        
+        # 第一段階: 親画像を検索
+        if parent_multi_scale:
+            parent_matches = find_image_multi_scale(parent_image, screenshot, threshold=parent_threshold)
+        else:
+            parent_matches = find_image_in_screen(parent_image, screenshot, threshold=parent_threshold)
+        
+        if not parent_matches:
+            return jsonify({
+                'status': 'parent_not_found',
+                'message': 'Parent image not found in screen capture',
+                'parent_matches': [],
+                'child_matches': [],
+                'clicked': []
+            })
+        
+        # 第二段階: 各親画像の範囲内で子画像を検索
+        all_child_matches = []
+        
+        for i, parent_match in enumerate(parent_matches):
+            # 親画像の範囲を計算（マージンを含む）
+            parent_left = max(0, parent_match['top_left_x'] - margin_x)
+            parent_top = max(0, parent_match['top_left_y'] - margin_y)
+            parent_right = min(screenshot.width, parent_match['top_left_x'] + parent_match['width'] + margin_x)
+            parent_bottom = min(screenshot.height, parent_match['top_left_y'] + parent_match['height'] + margin_y)
+            
+            # 親画像範囲を切り出し
+            parent_region = screenshot.crop((parent_left, parent_top, parent_right, parent_bottom))
+            
+            # 親画像範囲内で子画像を検索
+            if child_multi_scale:
+                child_matches_in_region = find_image_multi_scale(child_image, parent_region, threshold=child_threshold)
+            else:
+                child_matches_in_region = find_image_in_screen(child_image, parent_region, threshold=child_threshold)
+            
+            # 座標を全画面座標に変換
+            for child_match in child_matches_in_region:
+                child_match['center_x'] += parent_left
+                child_match['center_y'] += parent_top
+                child_match['top_left_x'] += parent_left
+                child_match['top_left_y'] += parent_top
+                child_match['parent_match_index'] = i
+                child_match['parent_match_id'] = f"parent_{i}"
+                
+                # 親画像の情報を追加
+                child_match['parent_info'] = {
+                    'center_x': parent_match['center_x'],
+                    'center_y': parent_match['center_y'],
+                    'confidence': parent_match['confidence'],
+                    'search_region': {
+                        'left': parent_left,
+                        'top': parent_top,
+                        'right': parent_right,
+                        'bottom': parent_bottom,
+                        'width': parent_right - parent_left,
+                        'height': parent_bottom - parent_top
+                    }
+                }
+                
+                all_child_matches.append(child_match)
+        
+        # 結果をソート（信頼度順）
+        all_child_matches.sort(key=lambda x: x['confidence'], reverse=True)
+        
+        if not all_child_matches:
+            return jsonify({
+                'status': 'child_not_found',
+                'message': 'Child image not found in any parent regions',
+                'parent_matches': parent_matches,
+                'child_matches': [],
+                'clicked': []
+            })
+        
+        # クリック実行
+        clicked_positions = []
+        targets = all_child_matches if click_all else all_child_matches[:1]
+        
+        for match in targets:
+            click_x = int(match['center_x']) + offset_x
+            click_y = int(match['center_y']) + offset_y
+            pyautogui.click(click_x, click_y, button=button)
+            
+            clicked_info = match.copy()
+            clicked_info.update({
+                'click_x': click_x,
+                'click_y': click_y,
+                'offset_x': offset_x,
+                'offset_y': offset_y,
+                'button': button
+            })
+            clicked_positions.append(clicked_info)
+        
+        return jsonify({
+            'status': 'success',
+            'parent_matches': parent_matches,
+            'child_matches': all_child_matches,
+            'clicked': clicked_positions,
+            'total_parent_found': len(parent_matches),
+            'total_child_found': len(all_child_matches),
+            'total_clicked': len(clicked_positions),
+            'parameters': {
+                'parent_threshold': parent_threshold,
+                'child_threshold': child_threshold,
+                'parent_multi_scale': parent_multi_scale,
+                'child_multi_scale': child_multi_scale,
+                'margin_x': margin_x,
+                'margin_y': margin_y,
+                'button': button,
+                'click_all': click_all,
+                'offset_x': offset_x,
+                'offset_y': offset_y
+            },
+            'images_info': {
+                'parent': {
+                    'width': parent_image.width,
+                    'height': parent_image.height,
+                    'mode': parent_image.mode
+                },
+                'child': {
+                    'width': child_image.width,
+                    'height': child_image.height,
+                    'mode': child_image.mode
+                }
+            }
+        })
+        
+    except Exception as e:
+        return jsonify({'error': str(e), 'status': 'error'}), 500
+
 @app.route('/image/find_and_click', methods=['POST'])
 @require_api_key
 def find_and_click_image():

@@ -72,6 +72,7 @@ class MouseApiClient:
         self.base_url = cfg.base_url
         self.headers = cfg.headers
         self.client = httpx.AsyncClient(timeout=30)
+        self.ocr_client = httpx.AsyncClient(timeout=120)
 
     async def _get(self, path: str, params: Dict[str, Any] | None = None) -> Dict[str, Any]:
         url = f"{self.base_url}{path}"
@@ -79,9 +80,10 @@ class MouseApiClient:
         r.raise_for_status()
         return r.json()
 
-    async def _post_json(self, path: str, data: Dict[str, Any]) -> Dict[str, Any]:
+    async def _post_json(self, path: str, data: Dict[str, Any], use_ocr_timeout: bool = False) -> Dict[str, Any]:
         url = f"{self.base_url}{path}"
-        r = await self.client.post(url, headers={"Content-Type": "application/json", **self.headers}, json=data)
+        client = self.ocr_client if use_ocr_timeout else self.client
+        r = await client.post(url, headers={"Content-Type": "application/json", **self.headers}, json=data)
         r.raise_for_status()
         return r.json()
 
@@ -163,7 +165,7 @@ class MouseApiClient:
             payload["show_all"] = show_all
         if min_confidence is not None:
             payload["min_confidence"] = min_confidence
-        return await self._post_json("/screen/capture_with_ocr", payload)
+        return await self._post_json("/screen/capture_with_ocr", payload, use_ocr_timeout=True)
 
     # --- text ---
     async def text_type(self, text: str, x: Optional[int] = None, y: Optional[int] = None, interval: Optional[float] = None, mode: Optional[str] = None, press_enter: Optional[bool] = None) -> Dict[str, Any]:
@@ -188,7 +190,7 @@ class MouseApiClient:
             payload["min_confidence"] = min_confidence
         if region is not None:
             payload["region"] = region
-        return await self._post_json("/text/search", payload)
+        return await self._post_json("/text/search", payload, use_ocr_timeout=True)
 
     async def text_find_and_click(
         self,
@@ -207,7 +209,7 @@ class MouseApiClient:
             payload["button"] = button
         if click_all is not None:
             payload["click_all"] = click_all
-        return await self._post_json("/text/find_and_click", payload)
+        return await self._post_json("/text/find_and_click", payload, use_ocr_timeout=True)
 
     async def text_ocr(self, min_confidence: Optional[float] = None, debug: Optional[bool] = None) -> Dict[str, Any]:
         payload: Dict[str, Any] = {}
@@ -215,7 +217,7 @@ class MouseApiClient:
             payload["min_confidence"] = min_confidence
         if debug is not None:
             payload["debug"] = debug
-        return await self._post_json("/text/ocr", payload)
+        return await self._post_json("/text/ocr", payload, use_ocr_timeout=True)
 
     # --- image ---
     async def image_search(
@@ -277,6 +279,7 @@ class MouseApiClient:
 
     async def aclose(self):
         await self.client.aclose()
+        await self.ocr_client.aclose()
 
 
 mcp = FastMCP("mouse-mcp")
