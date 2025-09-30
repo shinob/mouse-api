@@ -2097,6 +2097,172 @@ def find_and_click_image():
     except Exception as e:
         return jsonify({'error': str(e), 'status': 'error'}), 500
 
+@app.route('/keyboard/hotkey', methods=['POST'])
+@require_api_key
+def press_hotkey():
+    """キーバインド（ホットキー）を実行"""
+    if not GUI_AVAILABLE:
+        return jsonify({'error': 'GUI functionality not available', 'status': 'error'}), 503
+    
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({'error': 'Request body required', 'status': 'error'}), 400
+        
+        # キーバインドの取得
+        if 'keys' not in data:
+            return jsonify({'error': 'keys parameter required', 'status': 'error'}), 400
+        
+        keys = data['keys']
+        
+        # キーが文字列の場合はリストに変換
+        if isinstance(keys, str):
+            # "ctrl+a" のような文字列を分割
+            keys = [key.strip().lower() for key in keys.split('+')]
+        elif isinstance(keys, list):
+            # リストの場合は小文字に統一
+            keys = [str(key).strip().lower() for key in keys]
+        else:
+            return jsonify({'error': 'keys must be a string or list', 'status': 'error'}), 400
+        
+        if not keys:
+            return jsonify({'error': 'At least one key required', 'status': 'error'}), 400
+        
+        # サポートされているキーの確認
+        supported_keys = {
+            # 修飾キー
+            'ctrl', 'control', 'cmd', 'command', 'alt', 'shift', 'win', 'windows',
+            # 文字キー
+            'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm',
+            'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z',
+            # 数字キー
+            '0', '1', '2', '3', '4', '5', '6', '7', '8', '9',
+            # ファンクションキー
+            'f1', 'f2', 'f3', 'f4', 'f5', 'f6', 'f7', 'f8', 'f9', 'f10', 'f11', 'f12',
+            # 特殊キー
+            'enter', 'return', 'space', 'tab', 'esc', 'escape', 'backspace', 'delete',
+            'home', 'end', 'pageup', 'pagedown', 'insert', 'pause', 'printscreen',
+            # 方向キー
+            'up', 'down', 'left', 'right',
+            # その他
+            'capslock', 'numlock', 'scrolllock'
+        }
+        
+        # キーの検証
+        invalid_keys = [key for key in keys if key not in supported_keys]
+        if invalid_keys:
+            return jsonify({
+                'error': f'Unsupported keys: {invalid_keys}',
+                'supported_keys': sorted(supported_keys),
+                'status': 'error'
+            }), 400
+        
+        # キー名の正規化（pyautoguiで使用される名前に変換）
+        key_mapping = {
+            'control': 'ctrl',
+            'command': 'cmd',
+            'windows': 'win',
+            'return': 'enter',
+            'escape': 'esc'
+        }
+        
+        normalized_keys = []
+        for key in keys:
+            mapped_key = key_mapping.get(key, key)
+            normalized_keys.append(mapped_key)
+        
+        # ホットキーを実行
+        try:
+            pyautogui.hotkey(*normalized_keys)
+            action = f"ホットキー実行: {'+'.join(normalized_keys)}"
+        except Exception as hotkey_error:
+            return jsonify({
+                'error': f'Failed to execute hotkey: {str(hotkey_error)}',
+                'keys': normalized_keys,
+                'status': 'error'
+            }), 500
+        
+        return jsonify({
+            'status': 'success',
+            'action': action,
+            'keys': normalized_keys,
+            'original_keys': keys
+        })
+        
+    except Exception as e:
+        return jsonify({'error': str(e), 'status': 'error'}), 500
+
+@app.route('/keyboard/press', methods=['POST'])
+@require_api_key
+def press_key():
+    """単一キーを押下"""
+    if not GUI_AVAILABLE:
+        return jsonify({'error': 'GUI functionality not available', 'status': 'error'}), 503
+    
+    try:
+        data = request.get_json()
+        if not data or 'key' not in data:
+            return jsonify({'error': 'key parameter required', 'status': 'error'}), 400
+        
+        key = str(data['key']).strip().lower()
+        repeat = int(data.get('repeat', 1))  # 繰り返し回数
+        interval = float(data.get('interval', 0.1))  # 繰り返し間隔（秒）
+        
+        if repeat < 1:
+            return jsonify({'error': 'repeat must be at least 1', 'status': 'error'}), 400
+        
+        if interval < 0:
+            return jsonify({'error': 'interval must be non-negative', 'status': 'error'}), 400
+        
+        # サポートされているキーの確認（hotkey関数と同じリスト）
+        supported_keys = {
+            'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm',
+            'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z',
+            '0', '1', '2', '3', '4', '5', '6', '7', '8', '9',
+            'f1', 'f2', 'f3', 'f4', 'f5', 'f6', 'f7', 'f8', 'f9', 'f10', 'f11', 'f12',
+            'enter', 'return', 'space', 'tab', 'esc', 'escape', 'backspace', 'delete',
+            'home', 'end', 'pageup', 'pagedown', 'insert', 'pause', 'printscreen',
+            'up', 'down', 'left', 'right',
+            'capslock', 'numlock', 'scrolllock', 'ctrl', 'alt', 'shift', 'win'
+        }
+        
+        if key not in supported_keys:
+            return jsonify({
+                'error': f'Unsupported key: {key}',
+                'supported_keys': sorted(supported_keys),
+                'status': 'error'
+            }), 400
+        
+        # キー名の正規化
+        key_mapping = {
+            'return': 'enter',
+            'escape': 'esc'
+        }
+        
+        normalized_key = key_mapping.get(key, key)
+        
+        # キーを押下
+        for i in range(repeat):
+            pyautogui.press(normalized_key)
+            if i < repeat - 1 and interval > 0:  # 最後の繰り返しでは待機しない
+                time.sleep(interval)
+        
+        action = f"キー押下: {normalized_key}"
+        if repeat > 1:
+            action += f" (x{repeat})"
+        
+        return jsonify({
+            'status': 'success',
+            'action': action,
+            'key': normalized_key,
+            'original_key': key,
+            'repeat': repeat,
+            'interval': interval
+        })
+        
+    except Exception as e:
+        return jsonify({'error': str(e), 'status': 'error'}), 500
+
 @app.route('/health', methods=['GET'])
 def health_check():
     return jsonify({

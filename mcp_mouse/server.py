@@ -273,6 +273,26 @@ class MouseApiClient:
             data["offset_y"] = str(offset_y)
         return await self._post_file("/image/find_and_click", files=files, data=data)
 
+    # --- keyboard ---
+    async def keyboard_hotkey(self, keys: str | list[str]) -> Dict[str, Any]:
+        """キーバインド（ホットキー）を実行"""
+        payload: Dict[str, Any] = {"keys": keys}
+        return await self._post_json("/keyboard/hotkey", payload)
+
+    async def keyboard_press(
+        self,
+        key: str,
+        repeat: Optional[int] = None,
+        interval: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """単一キーを押下"""
+        payload: Dict[str, Any] = {"key": key}
+        if repeat is not None:
+            payload["repeat"] = repeat
+        if interval is not None:
+            payload["interval"] = interval
+        return await self._post_json("/keyboard/press", payload)
+
     # --- system ---
     async def health(self) -> Dict[str, Any]:
         return await self._get("/health")
@@ -602,6 +622,34 @@ async def list_images() -> Dict[str, Any]:
                 })
     
     return result
+
+
+@mcp.tool()
+async def keyboard_hotkey(
+    server: Optional[str],
+    keys: str,
+) -> Dict[str, Any]:
+    """キーバインド（ホットキー）を実行します。例: "ctrl+a", "ctrl+c", "alt+tab"など"""
+    cli = _client_for(server)
+    try:
+        return await cli.keyboard_hotkey(keys)
+    finally:
+        await cli.aclose()
+
+
+@mcp.tool()
+async def keyboard_press(
+    server: Optional[str],
+    key: str,
+    repeat: Optional[int] = None,
+    interval: Optional[float] = None,
+) -> Dict[str, Any]:
+    """単一キーを押下します。repeatで繰り返し回数、intervalで間隔（秒）を指定可能"""
+    cli = _client_for(server)
+    try:
+        return await cli.keyboard_press(key, repeat, interval)
+    finally:
+        await cli.aclose()
 
 
 @mcp.tool()
