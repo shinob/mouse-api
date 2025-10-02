@@ -93,6 +93,8 @@ pip install -r requirements.txt --break-system-packages
 
 ## 使用方法
 
+Python からの利用は `PYTHON_CLIENT_GUIDE.md` を参照してください。
+
 ### サーバー起動
 
 #### 起動スクリプトを使用（推奨）
