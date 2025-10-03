@@ -47,7 +47,7 @@ PCのマウス操作、デスクトップキャプチャ、OCR、画像マッチ
 ```bash
 # Pythonライブラリの依存関係
 sudo apt-get update
-sudo apt-get install python3-tk python3-dev
+sudo apt-get install python3-tk python3-dev xclip
 
 # OCR機能の選択肢1: EasyOCR APIサーバー（推奨）
 # - より高精度なOCR処理
