@@ -40,6 +40,7 @@ PCのマウス操作、デスクトップキャプチャ、OCR、画像マッチ
 - IPv4/IPv6対応
 - ポート番号の設定可能
 - リアルタイムヘルスチェック
+- API Key認証によるセキュリティ保護
 
 ## システム要件
 
@@ -90,6 +91,50 @@ pip install -r requirements.txt
 ```bash
 pip install -r requirements.txt --break-system-packages
 ```
+
+## セキュリティ設定
+
+このAPIは**API Key認証**によってセキュリティが保護されています。
+
+### API Key設定
+
+#### 方法1: 環境変数（推奨）
+
+```bash
+export API_KEY="your-very-secure-random-api-key-32-characters-long"
+```
+
+#### 方法2: 設定ファイル
+
+`config.json` を作成：
+
+```json
+{
+  "security": {
+    "require_api_key": true,
+    "api_keys": [
+      "your-secure-api-key-1",
+      "your-secure-api-key-2"
+    ]
+  }
+}
+```
+
+### API Key使用方法
+
+#### ヘッダーで指定（推奨）
+
+```bash
+curl -H "X-API-Key: your-api-key" http://localhost:5000/mouse/position
+```
+
+#### クエリパラメータで指定
+
+```bash
+curl "http://localhost:5000/mouse/position?api_key=your-api-key"
+```
+
+⚠️ **重要**: 本番環境では強力なランダムAPIキーを使用してください。詳細は `API_SECURITY_GUIDE.md` を参照。
 
 ## 使用方法
 
@@ -614,19 +659,21 @@ GET /health
 ### curl を使用した例
 
 ```bash
-# IPv4でのアクセス
-curl http://localhost:5000/mouse/position
+# IPv4でのアクセス（API Key必須）
+curl -H "X-API-Key: your-api-key" http://localhost:5000/mouse/position
 
 # IPv6でのアクセス
-curl http://[::1]:5000/mouse/position
+curl -H "X-API-Key: your-api-key" http://[::1]:5000/mouse/position
 
 # マウス移動
 curl -X POST http://localhost:5000/mouse/move \
+  -H "X-API-Key: your-api-key" \
   -H "Content-Type: application/json" \
   -d '{"x": 500, "y": 300, "duration": 0.5}'
 
 # 左クリック
 curl -X POST http://localhost:5000/mouse/click \
+  -H "X-API-Key: your-api-key" \
   -H "Content-Type: application/json" \
   -d '{"button": "left", "x": 100, "y": 100}'
 
@@ -681,6 +728,34 @@ curl -X POST http://localhost:5000/image/find_and_click \
   -F "image=@button.png" \
   -F "threshold=0.8" \
   -F "button=left"
+
+# OCRテキスト抽出のみ
+curl -X POST http://localhost:5000/text/ocr \
+  -H "Content-Type: application/json" \
+  -d '{"min_confidence": 50.0, "debug": true}'
+
+# ネスト画像検索
+curl -X POST http://localhost:5000/image/nested_search \
+  -F "parent_image=@window.png" \
+  -F "child_image=@button.png" \
+  -F "parent_threshold=0.8" \
+  -F "child_threshold=0.8"
+
+# ネスト画像検索してクリック
+curl -X POST http://localhost:5000/image/nested_find_and_click \
+  -F "parent_image=@window.png" \
+  -F "child_image=@button.png" \
+  -F "button=left"
+
+# ホットキー実行
+curl -X POST http://localhost:5000/keyboard/hotkey \
+  -H "Content-Type: application/json" \
+  -d '{"keys": "ctrl+a"}'
+
+# キー押下
+curl -X POST http://localhost:5000/keyboard/press \
+  -H "Content-Type: application/json" \
+  -d '{"key": "enter", "repeat": 1}'
 ```
 
 ### Python を使用した例
@@ -693,9 +768,13 @@ import io
 
 # APIサーバーのURL
 API_URL = "http://localhost:5000"
+API_KEY = "your-api-key"  # セキュリティ設定で設定したAPIキー
+
+# ヘッダーにAPI Keyを設定
+headers = {"X-API-Key": API_KEY}
 
 # マウス位置取得
-response = requests.get(f"{API_URL}/mouse/position")
+response = requests.get(f"{API_URL}/mouse/position", headers=headers)
 position = response.json()
 print(f"マウス位置: ({position['x']}, {position['y']})")
 
@@ -704,14 +783,14 @@ requests.post(f"{API_URL}/mouse/move", json={
     "x": 400,
     "y": 300,
     "duration": 1.0
-})
+}, headers=headers)
 
 # 左クリック
 requests.post(f"{API_URL}/mouse/click", json={
     "button": "left",
     "x": 400,
     "y": 300
-})
+}, headers=headers)
 
 # マウススクロール
 requests.post(f"{API_URL}/mouse/scroll", json={
@@ -719,7 +798,7 @@ requests.post(f"{API_URL}/mouse/scroll", json={
     "clicks": 3,
     "x": 500,
     "y": 300
-})
+}, headers=headers)
 
 # マウスドラッグ
 requests.post(f"{API_URL}/mouse/drag", json={
@@ -728,10 +807,10 @@ requests.post(f"{API_URL}/mouse/drag", json={
     "end_x": 300,
     "end_y": 200,
     "duration": 1.0
-})
+}, headers=headers)
 
 # デスクトップキャプチャ
-response = requests.get(f"{API_URL}/screen/capture")
+response = requests.get(f"{API_URL}/screen/capture", headers=headers)
 data = response.json()
 
 # Base64画像をデコードして保存
