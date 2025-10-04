@@ -877,11 +877,62 @@ with open("button.png", "rb") as f:
     files = {"image": f}
     data = {"threshold": 0.8, "button": "left"}
     image_click_response = requests.post(f"{API_URL}/image/find_and_click", 
-                                       files=files, data=data)
+                                       files=files, data=data, headers=headers)
 
 image_click_data = image_click_response.json()
 if image_click_data['status'] == 'success':
     print(f"画像クリック: {image_click_data['total_clicked']}個")
+
+# OCRテキスト抽出のみ
+ocr_response = requests.post(f"{API_URL}/text/ocr", json={
+    "min_confidence": 50.0,
+    "debug": True
+}, headers=headers)
+ocr_data = ocr_response.json()
+if ocr_data['status'] == 'success':
+    print(f"検出されたテキスト: {ocr_data['total_detected']}個")
+    for result in ocr_data['ocr_results']:
+        print(f"  テキスト: {result['text']} (信頼度: {result['confidence']:.1f}%)")
+
+# ネスト画像検索
+with open("window.png", "rb") as parent_f, open("button.png", "rb") as child_f:
+    files = {"parent_image": parent_f, "child_image": child_f}
+    data = {"parent_threshold": 0.8, "child_threshold": 0.8}
+    nested_search_response = requests.post(f"{API_URL}/image/nested_search", 
+                                         files=files, data=data, headers=headers)
+
+nested_data = nested_search_response.json()
+if nested_data['status'] == 'success':
+    print(f"親画像マッチ: {nested_data['total_parent_found']}個")
+    print(f"子画像マッチ: {nested_data['total_child_found']}個")
+
+# ネスト画像検索＆クリック
+with open("window.png", "rb") as parent_f, open("button.png", "rb") as child_f:
+    files = {"parent_image": parent_f, "child_image": child_f}
+    data = {"parent_threshold": 0.8, "child_threshold": 0.8, "button": "left"}
+    nested_click_response = requests.post(f"{API_URL}/image/nested_find_and_click", 
+                                        files=files, data=data, headers=headers)
+
+nested_click_data = nested_click_response.json()
+if nested_click_data['status'] == 'success':
+    print(f"ネストクリック: {nested_click_data['total_clicked']}個")
+
+# ホットキー実行
+hotkey_response = requests.post(f"{API_URL}/keyboard/hotkey", json={
+    "keys": "ctrl+a"
+}, headers=headers)
+hotkey_data = hotkey_response.json()
+if hotkey_data['status'] == 'success':
+    print(f"ホットキー実行: {hotkey_data['action']}")
+
+# キー押下
+key_response = requests.post(f"{API_URL}/keyboard/press", json={
+    "key": "enter",
+    "repeat": 1
+}, headers=headers)
+key_data = key_response.json()
+if key_data['status'] == 'success':
+    print(f"キー押下: {key_data['action']}")
 ```
 
 ## 依存関係
