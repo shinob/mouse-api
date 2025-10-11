@@ -1667,6 +1667,130 @@ def search_image():
     except Exception as e:
         return jsonify({'error': str(e), 'status': 'error'}), 500
 
+@app.route('/image/find_in_region', methods=['POST'])
+@require_api_key
+def find_image_in_region():
+    """指定された座標範囲内で画像を検索"""
+    if not GUI_AVAILABLE:
+        return jsonify({'error': 'GUI functionality not available', 'status': 'error'}), 503
+    if not OPENCV_AVAILABLE:
+        return jsonify({'error': 'OpenCV functionality not available', 'status': 'error'}), 503
+    
+    try:
+        # リクエストからパラメータを取得
+        threshold = float(request.form.get('threshold', 0.8))
+        multi_scale = request.form.get('multi_scale', 'false').lower() == 'true'
+        scale_range_min = float(request.form.get('scale_range_min', 0.5))
+        scale_range_max = float(request.form.get('scale_range_max', 2.0))
+        scale_steps = int(request.form.get('scale_steps', 10))
+        
+        # 座標パラメータを取得
+        try:
+            top = int(request.form.get('top'))
+            left = int(request.form.get('left'))
+            width = int(request.form.get('width'))
+            height = int(request.form.get('height'))
+        except (TypeError, ValueError):
+            return jsonify({'error': 'top, left, width, height parameters are required and must be integers', 'status': 'error'}), 400
+        
+        # 座標の妥当性をチェック
+        if width <= 0 or height <= 0:
+            return jsonify({'error': 'width and height must be positive', 'status': 'error'}), 400
+        
+        # アップロードされた画像ファイルを取得
+        if 'image' not in request.files:
+            return jsonify({'error': 'No image file provided', 'status': 'error'}), 400
+        
+        image_file = request.files['image']
+        if image_file.filename == '':
+            return jsonify({'error': 'No image file selected', 'status': 'error'}), 400
+        
+        # 画像ファイルを読み込み
+        try:
+            template_image = Image.open(image_file.stream)
+            # RGBAをRGBに変換（必要に応じて）
+            if template_image.mode == 'RGBA':
+                template_image = template_image.convert('RGB')
+        except Exception as e:
+            return jsonify({'error': f'Invalid image file: {str(e)}', 'status': 'error'}), 400
+        
+        # スクリーンキャプチャ
+        screenshot = ImageGrab.grab()
+        screen_width, screen_height = screenshot.size
+        
+        # 座標範囲を画面サイズでクリップ
+        right = left + width
+        bottom = top + height
+        
+        # 画面境界チェック
+        if left < 0 or top < 0 or right > screen_width or bottom > screen_height:
+            # 画面内に収まるようクリッピング
+            left = max(0, left)
+            top = max(0, top)
+            right = min(screen_width, right)
+            bottom = min(screen_height, bottom)
+            
+            # クリッピング後のサイズを更新
+            width = right - left
+            height = bottom - top
+            
+            if width <= 0 or height <= 0:
+                return jsonify({'error': 'Search region is out of screen bounds', 'status': 'error'}), 400
+        
+        # 指定された領域を切り出し
+        search_region = screenshot.crop((left, top, right, bottom))
+        
+        # 画像マッチングを実行（指定領域内で）
+        if multi_scale:
+            matches = find_image_multi_scale(
+                template_image, 
+                search_region, 
+                threshold=threshold,
+                scale_range=(scale_range_min, scale_range_max),
+                scale_steps=scale_steps
+            )
+        else:
+            matches = find_image_in_screen(template_image, search_region, threshold=threshold)
+        
+        # マッチした座標を全画面座標に変換
+        for match in matches:
+            match['center_x'] += left
+            match['center_y'] += top
+            match['top_left_x'] += left
+            match['top_left_y'] += top
+        
+        return jsonify({
+            'status': 'success',
+            'matches': matches,
+            'total_found': len(matches),
+            'search_region': {
+                'top': top,
+                'left': left,
+                'width': width,
+                'height': height,
+                'right': right,
+                'bottom': bottom
+            },
+            'screen_info': {
+                'width': screen_width,
+                'height': screen_height
+            },
+            'parameters': {
+                'threshold': threshold,
+                'multi_scale': multi_scale,
+                'scale_range': [scale_range_min, scale_range_max] if multi_scale else None,
+                'scale_steps': scale_steps if multi_scale else None
+            },
+            'template_info': {
+                'width': template_image.width,
+                'height': template_image.height,
+                'mode': template_image.mode
+            }
+        })
+        
+    except Exception as e:
+        return jsonify({'error': str(e), 'status': 'error'}), 500
+
 @app.route('/image/nested_search', methods=['POST'])
 @require_api_key
 def nested_image_search():
