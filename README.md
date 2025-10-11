@@ -36,6 +36,11 @@ PCのマウス操作、デスクトップキャプチャ、OCR、画像マッチ
 - 指定座標への文字入力
 - 文字間隔の調整
 
+### ⌨️ キーボード操作
+- ホットキー実行（Ctrl+C、Alt+Tabなど）
+- 単一キー押下（Enter、Space、矢印キーなど）
+- キー押下の繰り返し実行
+
 ### 🔧 その他
 - IPv4/IPv6対応
 - ポート番号の設定可能
@@ -634,6 +639,227 @@ Form Data:
 }
 ```
 
+#### 座標指定画像検索（新機能）
+
+```bash
+POST /image/find_in_region
+Content-Type: multipart/form-data
+
+Form Data:
+- image: <画像ファイル>
+- top: 100
+- left: 200
+- width: 500
+- height: 400
+- threshold: 0.8
+- multi_scale: true
+```
+
+**パラメータ:**
+- `image` (必須): 検索するテンプレート画像ファイル
+- `top` (必須): 検索範囲の上端Y座標
+- `left` (必須): 検索範囲の左端X座標
+- `width` (必須): 検索範囲の幅
+- `height` (必須): 検索範囲の高さ
+- `threshold` (オプション): マッチング閾値（0.0-1.0）、デフォルト: 0.8
+- `multi_scale` (オプション): マルチスケール検索、デフォルト: false
+
+**レスポンス例:**
+```json
+{
+  "status": "success",
+  "matches": [
+    {
+      "center_x": 450,
+      "center_y": 350,
+      "top_left_x": 400,
+      "top_left_y": 300,
+      "width": 100,
+      "height": 100,
+      "confidence": 0.92
+    }
+  ],
+  "total_found": 1,
+  "search_region": {
+    "top": 100,
+    "left": 200,
+    "width": 500,
+    "height": 400,
+    "right": 700,
+    "bottom": 500
+  },
+  "screen_info": {
+    "width": 1920,
+    "height": 1080
+  }
+}
+```
+
+#### ネスト画像検索
+
+```bash
+POST /image/nested_search
+Content-Type: multipart/form-data
+
+Form Data:
+- parent_image: <親画像ファイル>
+- child_image: <子画像ファイル>
+- parent_threshold: 0.8
+- child_threshold: 0.8
+- parent_multi_scale: false
+- child_multi_scale: false
+```
+
+**パラメータ:**
+- `parent_image` (必須): 親画像ファイル（検索対象の画面領域）
+- `child_image` (必須): 子画像ファイル（検索したい要素）
+- `parent_threshold` (オプション): 親画像のマッチング閾値（0.0-1.0）、デフォルト: 0.8
+- `child_threshold` (オプション): 子画像のマッチング閾値（0.0-1.0）、デフォルト: 0.8
+- `parent_multi_scale` (オプション): 親画像のマルチスケール検索、デフォルト: false
+- `child_multi_scale` (オプション): 子画像のマルチスケール検索、デフォルト: false
+
+**レスポンス例:**
+```json
+{
+  "status": "success",
+  "parent_matches": [
+    {
+      "center_x": 500,
+      "center_y": 400,
+      "top_left_x": 400,
+      "top_left_y": 300,
+      "width": 200,
+      "height": 200,
+      "confidence": 0.95
+    }
+  ],
+  "child_matches": [
+    {
+      "center_x": 520,
+      "center_y": 420,
+      "top_left_x": 500,
+      "top_left_y": 400,
+      "width": 40,
+      "height": 40,
+      "confidence": 0.92,
+      "parent_region": {
+        "center_x": 500,
+        "center_y": 400,
+        "top_left_x": 400,
+        "top_left_y": 300,
+        "width": 200,
+        "height": 200
+      }
+    }
+  ],
+  "total_parent_found": 1,
+  "total_child_found": 1
+}
+```
+
+#### ネスト画像検索＆クリック
+
+```bash
+POST /image/nested_find_and_click
+Content-Type: multipart/form-data
+
+Form Data:
+- parent_image: <親画像ファイル>
+- child_image: <子画像ファイル>
+- parent_threshold: 0.8
+- child_threshold: 0.8
+- button: left
+- click_all: false
+```
+
+**パラメータ:**
+- `parent_image` (必須): 親画像ファイル（検索対象の画面領域）
+- `child_image` (必須): 子画像ファイル（検索したい要素）
+- `parent_threshold` (オプション): 親画像のマッチング閾値（0.0-1.0）、デフォルト: 0.8
+- `child_threshold` (オプション): 子画像のマッチング閾値（0.0-1.0）、デフォルト: 0.8
+- `button` (オプション): クリックボタン（`left`, `right`, `middle`）、デフォルト: `left`
+- `click_all` (オプション): 全マッチ箇所をクリック、デフォルト: false
+
+**レスポンス例:**
+```json
+{
+  "status": "success",
+  "clicked": [
+    {
+      "center_x": 520,
+      "center_y": 420,
+      "top_left_x": 500,
+      "top_left_y": 400,
+      "width": 40,
+      "height": 40,
+      "confidence": 0.92,
+      "parent_region": {
+        "center_x": 500,
+        "center_y": 400,
+        "top_left_x": 400,
+        "top_left_y": 300,
+        "width": 200,
+        "height": 200
+      }
+    }
+  ],
+  "total_clicked": 1,
+  "total_parent_found": 1,
+  "total_child_found": 1
+}
+```
+
+#### キーボード操作
+
+```bash
+POST /keyboard/hotkey
+Content-Type: application/json
+
+{
+  "keys": "ctrl+a"
+}
+```
+
+**パラメータ:**
+- `keys` (必須): ホットキーの組み合わせ（例: "ctrl+c", "alt+tab", "ctrl+shift+n"）
+
+**レスポンス例:**
+```json
+{
+  "status": "success",
+  "action": "ホットキー 'ctrl+a' を実行しました",
+  "keys": "ctrl+a"
+}
+```
+
+#### キー押下
+
+```bash
+POST /keyboard/press
+Content-Type: application/json
+
+{
+  "key": "enter",
+  "repeat": 1,
+  "interval": 0.1
+}
+```
+
+**パラメータ:**
+- `key` (必須): 押下するキー（例: "enter", "space", "tab", "esc", "f1"など）
+- `repeat` (オプション): 繰り返し回数、デフォルト: 1
+- `interval` (オプション): 繰り返し間隔（秒）、デフォルト: 0.1
+
+**レスポンス例:**
+```json
+{
+  "status": "success",
+  "action": "キー 'enter' を1回押下しました",
+  "key": "enter",
+  "repeat": 1
+}
+```
+
 #### ヘルスチェック
 
 ```bash
@@ -677,26 +903,40 @@ curl -X POST http://localhost:5000/mouse/click \
   -H "Content-Type: application/json" \
   -d '{"button": "left", "x": 100, "y": 100}'
 
-# マウススクロール（上方向）
+# マウススクロール（下方向）
 curl -X POST http://localhost:5000/mouse/scroll \
+  -H "X-API-Key: your-api-key" \
   -H "Content-Type: application/json" \
-  -d '{"direction": "up", "clicks": 3, "x": 500, "y": 300}'
+  -d '{"direction": "vertical", "clicks": -3, "x": 500, "y": 300}'
 
 # マウスドラッグ
 curl -X POST http://localhost:5000/mouse/drag \
+  -H "X-API-Key: your-api-key" \
   -H "Content-Type: application/json" \
-  -d '{"start_x": 100, "start_y": 100, "end_x": 300, "end_y": 200, "duration": 1.0}'
+  -d '{"from_x": 100, "from_y": 100, "to_x": 300, "to_y": 200, "duration": 1.0}'
 
 # デスクトップキャプチャ
-curl http://localhost:5000/screen/capture
+curl -H "X-API-Key: your-api-key" http://localhost:5000/screen/capture
+
+# 座標指定画像検索（新機能）
+curl -X POST http://localhost:5000/image/find_in_region \
+  -H "X-API-Key: your-api-key" \
+  -F "image=@search_target.png" \
+  -F "top=100" \
+  -F "left=200" \
+  -F "width=500" \
+  -F "height=400" \
+  -F "threshold=0.8"
 
 # 文字検索
 curl -X POST http://localhost:5000/text/search \
+  -H "X-API-Key: your-api-key" \
   -H "Content-Type: application/json" \
   -d '{"text": "OK", "min_confidence": 70.0}'
 
 # 文字入力
 curl -X POST http://localhost:5000/text/type \
+  -H "X-API-Key: your-api-key" \
   -H "Content-Type: application/json" \
   -d '{"text": "Hello World", "x": 300, "y": 400}'
 
@@ -1065,6 +1305,11 @@ if key_data['status'] == 'success':
 | | `/text/type` | テキスト入力 |
 | **画像マッチング** | `/image/search` | 画像検索 |
 | | `/image/find_and_click` | 画像検索＆クリック |
+| | `/image/find_in_region` | 座標指定画像検索 |
+| | `/image/nested_search` | ネスト画像検索 |
+| | `/image/nested_find_and_click` | ネスト画像検索＆クリック |
+| **キーボード操作** | `/keyboard/hotkey` | ホットキー実行 |
+| | `/keyboard/press` | キー押下 |
 | **システム** | `/health` | ヘルスチェック |
 
 ## 高度な機能

@@ -245,6 +245,41 @@ class MouseApiClient:
             data["scale_steps"] = str(scale_steps)
         return await self._post_file("/image/search", files=files, data=data)
 
+    async def image_find_in_region(
+        self,
+        image_path: Path,
+        top: int,
+        left: int,
+        width: int,
+        height: int,
+        threshold: Optional[float],
+        multi_scale: Optional[bool],
+        scale_range_min: Optional[float],
+        scale_range_max: Optional[float],
+        scale_steps: Optional[int],
+    ) -> Dict[str, Any]:
+        """Search for an image within a specific region on screen."""
+        if not image_path.exists():
+            raise FileNotFoundError(str(image_path))
+        files = {"image": (image_path.name, image_path.open("rb"), "application/octet-stream")}
+        data: Dict[str, Any] = {
+            "top": str(top),
+            "left": str(left),
+            "width": str(width),
+            "height": str(height),
+        }
+        if threshold is not None:
+            data["threshold"] = str(threshold)
+        if multi_scale is not None:
+            data["multi_scale"] = "true" if multi_scale else "false"
+        if scale_range_min is not None:
+            data["scale_range_min"] = str(scale_range_min)
+        if scale_range_max is not None:
+            data["scale_range_max"] = str(scale_range_max)
+        if scale_steps is not None:
+            data["scale_steps"] = str(scale_steps)
+        return await self._post_file("/image/find_in_region", files=files, data=data)
+
     async def image_find_and_click(
         self,
         image_path: Path,
@@ -272,6 +307,90 @@ class MouseApiClient:
         if offset_y is not None:
             data["offset_y"] = str(offset_y)
         return await self._post_file("/image/find_and_click", files=files, data=data)
+
+    async def image_nested_search(
+        self,
+        parent_image_path: Path,
+        child_image_path: Path,
+        parent_threshold: Optional[float],
+        child_threshold: Optional[float],
+        parent_multi_scale: Optional[bool],
+        child_multi_scale: Optional[bool],
+        margin_x: Optional[int] = None,
+        margin_y: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """Nested image search: search for parent image, then search for child image within parent regions."""
+        if not parent_image_path.exists():
+            raise FileNotFoundError(str(parent_image_path))
+        if not child_image_path.exists():
+            raise FileNotFoundError(str(child_image_path))
+        
+        files = {
+            "parent_image": (parent_image_path.name, parent_image_path.open("rb"), "application/octet-stream"),
+            "child_image": (child_image_path.name, child_image_path.open("rb"), "application/octet-stream")
+        }
+        data: Dict[str, Any] = {}
+        if parent_threshold is not None:
+            data["parent_threshold"] = str(parent_threshold)
+        if child_threshold is not None:
+            data["child_threshold"] = str(child_threshold)
+        if parent_multi_scale is not None:
+            data["parent_multi_scale"] = "true" if parent_multi_scale else "false"
+        if child_multi_scale is not None:
+            data["child_multi_scale"] = "true" if child_multi_scale else "false"
+        if margin_x is not None:
+            data["margin_x"] = str(margin_x)
+        if margin_y is not None:
+            data["margin_y"] = str(margin_y)
+        return await self._post_file("/image/nested_search", files=files, data=data)
+
+    async def image_nested_find_and_click(
+        self,
+        parent_image_path: Path,
+        child_image_path: Path,
+        parent_threshold: Optional[float],
+        child_threshold: Optional[float],
+        parent_multi_scale: Optional[bool],
+        child_multi_scale: Optional[bool],
+        button: Optional[str],
+        click_all: Optional[bool],
+        offset_x: Optional[int] = None,
+        offset_y: Optional[int] = None,
+        margin_x: Optional[int] = None,
+        margin_y: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """Nested image search and click: search for parent image, then search and click child image within parent regions."""
+        if not parent_image_path.exists():
+            raise FileNotFoundError(str(parent_image_path))
+        if not child_image_path.exists():
+            raise FileNotFoundError(str(child_image_path))
+        
+        files = {
+            "parent_image": (parent_image_path.name, parent_image_path.open("rb"), "application/octet-stream"),
+            "child_image": (child_image_path.name, child_image_path.open("rb"), "application/octet-stream")
+        }
+        data: Dict[str, Any] = {}
+        if parent_threshold is not None:
+            data["parent_threshold"] = str(parent_threshold)
+        if child_threshold is not None:
+            data["child_threshold"] = str(child_threshold)
+        if parent_multi_scale is not None:
+            data["parent_multi_scale"] = "true" if parent_multi_scale else "false"
+        if child_multi_scale is not None:
+            data["child_multi_scale"] = "true" if child_multi_scale else "false"
+        if button:
+            data["button"] = button
+        if click_all is not None:
+            data["click_all"] = "true" if click_all else "false"
+        if offset_x is not None:
+            data["offset_x"] = str(offset_x)
+        if offset_y is not None:
+            data["offset_y"] = str(offset_y)
+        if margin_x is not None:
+            data["margin_x"] = str(margin_x)
+        if margin_y is not None:
+            data["margin_y"] = str(margin_y)
+        return await self._post_file("/image/nested_find_and_click", files=files, data=data)
 
     # --- keyboard ---
     async def keyboard_hotkey(self, keys: str | list[str]) -> Dict[str, Any]:
@@ -622,6 +741,60 @@ async def list_images() -> Dict[str, Any]:
                 })
     
     return result
+
+
+@mcp.tool()
+async def image_nested_search(
+    server: Optional[str],
+    parent_image_path: str,
+    child_image_path: str,
+    parent_threshold: Optional[float] = None,
+    child_threshold: Optional[float] = None,
+    parent_multi_scale: Optional[bool] = None,
+    child_multi_scale: Optional[bool] = None,
+    margin_x: Optional[int] = None,
+    margin_y: Optional[int] = None,
+) -> Dict[str, Any]:
+    """ネスト画像検索: 親画像を検索し、その範囲内で子画像を検索します。相対パスを指定するとimgsディレクトリから自動的に検索します。"""
+    cli = _client_for(server)
+    try:
+        resolved_parent_path = _resolve_image_path(parent_image_path)
+        resolved_child_path = _resolve_image_path(child_image_path)
+        return await cli.image_nested_search(
+            resolved_parent_path, resolved_child_path, parent_threshold, child_threshold,
+            parent_multi_scale, child_multi_scale, margin_x, margin_y
+        )
+    finally:
+        await cli.aclose()
+
+
+@mcp.tool()
+async def image_nested_find_and_click(
+    server: Optional[str],
+    parent_image_path: str,
+    child_image_path: str,
+    parent_threshold: Optional[float] = None,
+    child_threshold: Optional[float] = None,
+    parent_multi_scale: Optional[bool] = None,
+    child_multi_scale: Optional[bool] = None,
+    button: Optional[str] = None,
+    click_all: Optional[bool] = None,
+    offset_x: Optional[int] = None,
+    offset_y: Optional[int] = None,
+    margin_x: Optional[int] = None,
+    margin_y: Optional[int] = None,
+) -> Dict[str, Any]:
+    """ネスト画像検索してクリック: 親画像を検索し、その範囲内で子画像を検索してクリックします。相対パスを指定するとimgsディレクトリから自動的に検索します。"""
+    cli = _client_for(server)
+    try:
+        resolved_parent_path = _resolve_image_path(parent_image_path)
+        resolved_child_path = _resolve_image_path(child_image_path)
+        return await cli.image_nested_find_and_click(
+            resolved_parent_path, resolved_child_path, parent_threshold, child_threshold,
+            parent_multi_scale, child_multi_scale, button, click_all, offset_x, offset_y, margin_x, margin_y
+        )
+    finally:
+        await cli.aclose()
 
 
 @mcp.tool()
